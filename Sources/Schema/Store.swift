@@ -192,7 +192,7 @@ final class DiagramStore: ObservableObject {
             p.x -= 90; p.y -= 60
             while scene.boxes.contains(where: { $0.frame.insetBy(dx: -16, dy: -16).contains(p) }) { p.x += 30; p.y += 30 }
         }
-        let position = Point((p.x / 10).rounded() * 10, (p.y / 10).rounded() * 10)
+        let position = Point((Double(p.x) / 10).rounded() * 10, (Double(p.y) / 10).rounded() * 10)
         var id = UUID()
         edit("New Entity") { id = $0.addEntity(named: name, at: position) }
         selection = .entities([id])
@@ -575,7 +575,10 @@ final class DiagramStore: ObservableObject {
             for (id, f) in sorted { target[id] = CGPoint(x: f.minX, y: y); y += f.height + gap }
         }
         edit("Align") { d in
-            for (id, p) in target { d.update(entity: id) { $0.position = Point((p.x / 10).rounded() * 10, (p.y / 10).rounded() * 10) } }
+            for (id, p) in target {
+                let x = (Double(p.x) / 10).rounded() * 10, y = (Double(p.y) / 10).rounded() * 10
+                d.update(entity: id) { $0.position = Point(x, y) }
+            }
         }
     }
 
