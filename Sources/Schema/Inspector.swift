@@ -1,0 +1,593 @@
+import AppKit
+import SchemaCore
+import SwiftUI
+
+/// The panel on the right: everything about what's selected, in one place. Nothing selected: the diagram's own settings.
+struct Inspector: View {
+    @ObservedObject var store: DiagramStore
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                switch store.selection {
+                case .none:
+                    DiagramInspector(store: store)
+                case .entities(let ids):
+                    if ids.count == 1, let e = store.diagram.entity(ids.first!) {
+                        EntityInspector(store: store, entity: e)
+                    } else {
+                        MultiInspector(store: store, count: ids.count)
+                    }
+                case .relationship(let id):
+                    if let r = store.diagram.relationship(id), let p = store.diagram.entity(r.parent), let c = store.diagram.entity(r.child) {
+                        RelationshipInspector(store: store, relationship: r, parent: p, child: c)
+                    }
+                case .domain(let id):
+                    if let d = store.diagram.domain(id) { DomainInspector(store: store, domain: d) }
+                }
+            }
+            .padding(.bottom, 16)
+        }
+    }
+}
+
+// MARK: Pieces
+
+private struct Section<Content: View>: View {
+    let title: String
+    var trailing: String = ""
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title.uppercased()).font(.system(size: 10.5, weight: .semibold)).tracking(0.5).foregroundStyle(MB.dim)
+                Spacer()
+                if !trailing.isEmpty { Text(trailing).font(.system(size: 10.5)).foregroundStyle(MB.dim) }
+            }
+            content
+        }
+        .padding(.horizontal, 14).padding(.top, 16)
+    }
+}
+
+private struct Labeled<Content: View>: View {
+    let label: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.system(size: 11.5)).foregroundStyle(MB.muted)
+            content
+        }
+    }
+}
+
+private struct Heading: View {
+    let kind: String
+    let title: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(kind.uppercased()).font(.system(size: 10.5, weight: .semibold)).tracking(0.5).foregroundStyle(MB.dim)
+            Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(MB.text).lineLimit(2)
+        }
+        .padding(.horizontal, 14).padding(.top, 14)
+    }
+}
+
+/// A few lines of text in the Maben field style.
+private struct MBTextArea: View {
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        TextField(placeholder, text: $text, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12.5))
+            .foregroundStyle(MB.text)
+            .lineLimit(2...6)
+            .padding(.horizontal, 9).padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(MB.wash(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(MB.line))
+    }
+}
+
+private struct MBMenuPicker<Value: Hashable>: View {
+    let options: [Value]
+    @Binding var selection: Value
+    let label: (Value) -> String
+
+    var body: some View {
+        Menu {
+            ForEach(options, id: \.self) { o in
+                Button { selection = o } label: {
+                    if o == selection { Label(label(o), systemImage: "checkmark") } else { Text(label(o)) }
+                }
+            }
+        } label: {
+            HStack {
+                Text(label(selection)).font(.system(size: 12.5)).foregroundStyle(MB.text)
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(MB.dim)
+            }
+            .padding(.horizontal, 9).frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(MB.wash(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(MB.line))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+    }
+}
+
+// MARK: Diagram
+
+struct DiagramInspector: View {
+    @ObservedObject var store: DiagramStore
+    @AppStorage("showHints") private var showHints = true
+
+    private func display<T>(_ path: WritableKeyPath<DisplayOptions, T>, _ name: String) -> Binding<T> {
+        Binding(get: { store.diagram.display[keyPath: path] }, set: { v in store.edit(name) { $0.display[keyPath: path] = v } })
+    }
+
+    var body: some View {
+        let d = store.diagram
+        Heading(kind: "Diagram", title: store.title)
+        Text("\(d.entities.count) \(d.entities.count == 1 ? "entity" : "entities") · \(d.relationships.count) \(d.relationships.count == 1 ? "relationship" : "relationships")")
+            .font(.system(size: 12)).foregroundStyle(MB.dim).padding(.horizontal, 14).padding(.top, 3)
+
+        Section(title: "Notation") {
+            MBSegmented(options: Notation.allCases, selection: display(\.notation, "Change Notation"), label: { $0 == .ie ? "Crow’s foot" : "IDEF1X" }, stretch: true)
+            Text(d.display.notation == .ie
+                 ? "Crow’s feet show the many side; a bar is one, a circle is zero."
+                 : "A dot marks the child. P is one or more, Z is zero or one; a diamond means the parent is optional.")
+                .font(.system(size: 11.5)).foregroundStyle(MB.dim).fixedSize(horizontal: false, vertical: true)
+        }
+        Section(title: "Show") {
+            Labeled(label: "Names") {
+                MBSegmented(options: NameDisplay.allCases, selection: display(\.names, "Change Names"), label: { $0 == .logical ? "Logical" : "Physical" }, stretch: true)
+            }
+            Labeled(label: "Detail") {
+                MBSegmented(options: DetailLevel.allCases, selection: display(\.level, "Change Detail"),
+                            label: { $0 == .all ? "Everything" : $0 == .keys ? "Keys" : "Names" }, stretch: true)
+            }
+            Toggle("Types", isOn: display(\.showTypes, "Show Types")).toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
+            Toggle("Not null, unique, auto", isOn: display(\.showConstraints, "Show Constraints")).toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
+            Toggle("Hints on the canvas", isOn: $showHints).toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
+        }
+        .foregroundStyle(MB.text)
+        Section(title: "SQL") {
+            Labeled(label: "Database") {
+                MBMenuPicker(options: Dialect.allCases, selection: Binding(get: { d.dialect }, set: { v in store.edit("Change Database") { $0.dialect = v } }), label: \.title)
+            }
+            Button(store.showSQL ? "Hide SQL" : "Show SQL") { store.showSQL.toggle() }.buttonStyle(.mbQuiet)
+        }
+        let problems = store.problems
+        if !problems.isEmpty {
+            Section(title: "Problems", trailing: "\(problems.count)") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(problems) { p in
+                        Button {
+                            if let e = p.entity { store.select(entity: e) } else if let r = p.relationship { store.selection = .relationship(r) }
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                                Image(systemName: p.severity == .error ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                                    .font(.system(size: 10.5)).foregroundStyle(p.severity == .error ? MB.red : MB.orange)
+                                Text(p.message).font(.system(size: 12)).foregroundStyle(MB.muted).multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: Entity
+
+struct EntityInspector: View {
+    @ObservedObject var store: DiagramStore
+    let entity: Entity
+    @State private var newLine = ""
+    @FocusState private var addFocused: Bool
+
+    private func bind(_ path: WritableKeyPath<Entity, String>, _ name: String) -> Binding<String> {
+        let id = entity.id
+        return Binding(get: { store.diagram.entity(id)?[keyPath: path] ?? "" },
+                       set: { v in store.edit(name, coalesce: "\(name)\(id)") { $0.update(entity: id) { $0[keyPath: path] = v } } })
+    }
+
+    var body: some View {
+        Heading(kind: store.diagram.isDependent(entity.id) ? "Dependent entity" : "Entity", title: entity.name.isEmpty ? "Untitled" : entity.name)
+        Section(title: "Name") {
+            MBField(placeholder: "Name", text: bind(\.name, "Rename Entity"))
+            Labeled(label: "Table name") {
+                MBField(placeholder: Naming.physical(entity.name), text: bind(\.physicalName, "Change Table Name"), mono: true)
+            }
+            HStack(spacing: 6) {
+                ForEach(EntityColor.allCases, id: \.self) { c in
+                    Button {
+                        store.edit("Change Colour") { $0.update(entity: entity.id) { $0.color = c } }
+                    } label: {
+                        ZStack {
+                            if let color = c.nsColor { Circle().fill(Color(nsColor: color)) } else {
+                                Circle().strokeBorder(MB.dim, lineWidth: 1)
+                                Rectangle().fill(MB.dim).frame(width: 12, height: 1).rotationEffect(.degrees(-45))
+                            }
+                            if entity.color == c { Circle().strokeBorder(MB.text, lineWidth: 2).padding(-3) }
+                        }
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(c.title)
+                    .accessibilityLabel(c.title)
+                }
+            }
+            .padding(.top, 2).padding(.leading, 3)
+        }
+        Section(title: "Attributes", trailing: "\(entity.attributes.count)") {
+            VStack(spacing: 2) {
+                ForEach(entity.attributes) { a in
+                    AttributeRow(store: store, entityID: entity.id, attribute: a)
+                }
+            }
+            .padding(.horizontal, -6)
+            HStack(spacing: 6) {
+                Image(systemName: "plus").font(.system(size: 10, weight: .bold)).foregroundStyle(MB.dim)
+                TextField("name type, e.g. email varchar(255)", text: $newLine)
+                    .textFieldStyle(.plain).font(.system(size: 12.5)).foregroundStyle(MB.text)
+                    .focused($addFocused)
+                    .onSubmit {
+                        if store.addAttribute(newLine, to: entity.id) != nil { newLine = "" }
+                        addFocused = true
+                    }
+            }
+            .padding(.horizontal, 9).frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(MB.wash(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(MB.line))
+            Text("Add pk, unique, not null, auto or = a default after the type. Leave the type out and one is picked from the name.")
+                .font(.system(size: 11)).foregroundStyle(MB.dim).fixedSize(horizontal: false, vertical: true)
+        }
+        Section(title: "Definition") {
+            MBTextArea(placeholder: "What this entity is", text: bind(\.definition, "Change Definition"))
+        }
+        let links = store.diagram.relationships(of: entity.id)
+        if !links.isEmpty {
+            Section(title: "Relationships", trailing: "\(links.count)") {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(links) { r in
+                        let other = store.diagram.entity(r.parent == entity.id ? r.child : r.parent)
+                        Button { store.selection = .relationship(r.id) } label: {
+                            HStack(spacing: 7) {
+                                Image(systemName: r.kind == .manyToMany ? "arrow.left.arrow.right" : r.parent == entity.id ? "arrow.down.right" : "arrow.up.left")
+                                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(MB.dim).frame(width: 14)
+                                Text(other?.name ?? "").font(.system(size: 12.5)).foregroundStyle(MB.text).lineLimit(1)
+                                Spacer(minLength: 4)
+                                Text(r.kind == .manyToMany ? "many-to-many" : r.parent == entity.id ? "child" : "parent").font(.system(size: 11)).foregroundStyle(MB.dim)
+                            }
+                            .padding(.horizontal, 6).frame(height: 26).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, -6)
+            }
+        }
+        Section(title: "") {
+            Button("Delete Entity") { store.selectedAttribute = nil; store.deleteSelection() }.buttonStyle(.mbDanger)
+        }
+    }
+}
+
+/// One attribute: key, name, type, required, and a menu for the rest.
+struct AttributeRow: View {
+    @ObservedObject var store: DiagramStore
+    let entityID: UUID
+    let attribute: Attribute
+    @State private var hovering = false
+
+    private func set(_ name: String, coalesce: Bool = false, _ change: @escaping (inout Attribute) -> Void) {
+        let (e, a) = (entityID, attribute.id)
+        store.edit(name, coalesce: coalesce ? "\(name)\(a)" : nil) { $0.update(attribute: a, in: e, change) }
+    }
+
+    private func text(_ path: WritableKeyPath<Attribute, String>, _ name: String) -> Binding<String> {
+        let (e, a) = (entityID, attribute.id)
+        return Binding(get: { store.diagram.entity(e)?.attributes.first { $0.id == a }?[keyPath: path] ?? "" },
+                       set: { v in set(name, coalesce: true) { $0[keyPath: path] = v } })
+    }
+
+    var body: some View {
+        let a = attribute
+        let selected = store.selectedAttribute == a.id
+        let expanded = store.expandedAttribute == a.id
+        let source = store.diagram.source(of: a)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Button { store.togglePrimaryKey(a.id, in: entityID) } label: {
+                    Image(systemName: a.isPrimaryKey ? "key.fill" : "key")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(a.isPrimaryKey ? MB.accentInk : MB.dim.opacity(0.6))
+                        .frame(width: 20, height: 22).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(a.isForeignKey ? (a.isPrimaryKey ? "Part of the key: the relationship is identifying. Click to make it non-identifying."
+                                                       : "Click to make the relationship identifying: this column joins the key.")
+                                     : (a.isPrimaryKey ? "Primary key. Click to take it out of the key." : "Click to make this the primary key."))
+                .accessibilityLabel("Primary key").accessibilityValue(a.isPrimaryKey ? "on" : "off")
+
+                if a.isForeignKey { MBTag(text: "FK", color: MB.dim).help(source.map { "Copies \($0.parent.name).\($0.column.name)" } ?? "Foreign key") }
+                TextField("name", text: Binding(get: { a.name }, set: { v in
+                    set("Rename Attribute", coalesce: true) { $0.name = v; $0.physicalName = ""; $0.foreignKey?.followsName = false }
+                }))
+                .textFieldStyle(.plain).font(.system(size: 12.5, weight: a.isPrimaryKey ? .semibold : .regular)).foregroundStyle(MB.text)
+                .frame(minWidth: 60)
+
+                if a.isForeignKey {
+                    Text(a.type).font(.system(size: 11.5)).foregroundStyle(MB.dim).lineLimit(1)
+                        .help(source.map { "The type follows \($0.parent.name).\($0.column.name)" } ?? "")
+                } else {
+                    TextField("type", text: text(\.type, "Change Type"))
+                        .textFieldStyle(.plain).font(.system(size: 11.5)).foregroundStyle(MB.muted)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: min(96, max(44, Metrics.width(a.type.isEmpty ? "type" : a.type, NSFont.systemFont(ofSize: 11.5)) + 10)))
+                        .onSubmit { set("Change Type") { if store.diagram.domain(named: $0.type) == nil, !$0.type.isEmpty { $0.type = QuickEntry.canonical($0.type) } } }
+                    typeMenu
+                }
+                MBToggleChip(text: "NN", help: a.isPrimaryKey ? "A key is always required" : a.isForeignKey ? "Set by the relationship: is the parent optional?" : "Required (not null)",
+                             isOn: Binding(get: { a.notNull }, set: { v in set("Change Attribute") { $0.notNull = v } }),
+                             enabled: !a.isPrimaryKey && !a.isForeignKey)
+                moreMenu
+            }
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    Labeled(label: "Column name") { MBField(placeholder: Naming.physical(a.name), text: text(\.physicalName, "Change Column Name"), mono: true) }
+                    if !a.isForeignKey {
+                        Labeled(label: "Default") { MBField(placeholder: "none", text: text(\.defaultValue, "Change Default"), mono: true) }
+                    }
+                    Labeled(label: "Definition") { MBTextArea(placeholder: "What this attribute means", text: text(\.definition, "Change Definition")) }
+                    if let source {
+                        Button("Copies \(source.parent.name).\(source.column.name): show the relationship") { store.selection = .relationship(source.relationship.id) }
+                            .buttonStyle(.plain).font(.system(size: 11.5)).foregroundStyle(MB.accentInk)
+                    }
+                }
+                .padding(.leading, 25).padding(.bottom, 6)
+            }
+        }
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(selected ? MB.selected : hovering ? MB.hover : .clear))
+        .onHover { hovering = $0 }
+        .simultaneousGesture(TapGesture().onEnded { store.selectedAttribute = a.id })
+    }
+
+    private var typeMenu: some View {
+        Menu {
+            ForEach(QuickEntry.suggestedTypes, id: \.self) { t in
+                Button(t) { set("Change Type") { $0.type = t } }
+            }
+            if !store.diagram.domains.isEmpty {
+                Divider()
+                ForEach(store.diagram.domains) { d in
+                    Button("\(d.name)  (\(d.type))") { set("Change Type") { $0.type = d.name } }
+                }
+            }
+        } label: {
+            Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(MB.dim).frame(width: 14, height: 22).contentShape(Rectangle())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .help("Pick a type or a domain")
+        .accessibilityLabel("Pick a type")
+    }
+
+    private var moreMenu: some View {
+        let a = attribute
+        return Menu {
+            Toggle("Unique", isOn: Binding(get: { a.unique }, set: { v in set("Change Attribute") { $0.unique = v } }))
+            if !a.isForeignKey {
+                Toggle("Counts up by itself (auto)", isOn: Binding(get: { a.autoIncrement }, set: { v in set("Change Attribute") { $0.autoIncrement = v } }))
+            }
+            Button(store.expandedAttribute == a.id ? "Hide Details" : "Column Name, Default, Definition…") {
+                store.expandedAttribute = store.expandedAttribute == a.id ? nil : a.id
+            }
+            Divider()
+            Button("Move Up") { store.moveAttribute(a.id, in: entityID, by: -1) }
+            Button("Move Down") { store.moveAttribute(a.id, in: entityID, by: 1) }
+            Divider()
+            if let fk = a.foreignKey {
+                Button("Show Its Relationship") { store.selection = .relationship(fk.relationship) }
+            } else {
+                Button("Delete Attribute", role: .destructive) { store.deleteAttribute(a.id, in: entityID) }
+            }
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold)).foregroundStyle(MB.dim).frame(width: 20, height: 22).contentShape(Rectangle())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .help("More: unique, default, definition, move, delete")
+        .accessibilityLabel("More for \(a.name)")
+    }
+}
+
+// MARK: Relationship
+
+struct RelationshipInspector: View {
+    @ObservedObject var store: DiagramStore
+    let relationship: Relationship
+    let parent: Entity
+    let child: Entity
+
+    private func set(_ name: String, coalesce: Bool = false, _ change: @escaping (inout Relationship) -> Void) {
+        let id = relationship.id
+        store.edit(name, coalesce: coalesce ? "\(name)\(id)" : nil) { $0.update(relationship: id, change) }
+    }
+
+    private var kindNote: String {
+        switch relationship.kind {
+        case .identifying: "\(child.name) can’t exist without \(parent.name): \(parent.name)’s key becomes part of \(child.name)’s key."
+        case .nonIdentifying: "\(child.name) points at \(parent.name) with an ordinary column. \(child.name) keeps its own key."
+        case .manyToMany: "Many on both sides. Neither entity gets a column; the SQL gets a table \(parent.tableName)_\(child.tableName) in between."
+        }
+    }
+
+    var body: some View {
+        let r = relationship
+        let own = r.parent == r.child
+        Heading(kind: "Relationship", title: "\(parent.name) → \(child.name)")
+        Text(Report.sentence(r, parent: parent, child: child))
+            .font(.system(size: 12)).foregroundStyle(MB.muted).fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14).padding(.top, 4)
+
+        Section(title: "Kind") {
+            MBMenuPicker(options: own ? [RelationshipKind.nonIdentifying, .manyToMany] : RelationshipKind.allCases,
+                         selection: Binding(get: { r.kind }, set: { v in set("Change Relationship") { $0.kind = v } }),
+                         label: { $0 == .identifying ? "Identifying" : $0 == .nonIdentifying ? "Non-identifying" : "Many-to-many" })
+            Text(kindNote).font(.system(size: 11.5)).foregroundStyle(MB.dim).fixedSize(horizontal: false, vertical: true)
+        }
+        if r.kind != .manyToMany {
+            Section(title: "How many") {
+                Labeled(label: "One \(parent.name) has") {
+                    MBMenuPicker(options: Cardinality.allCases, selection: Binding(get: { r.childCardinality }, set: { v in set("Change Cardinality") { $0.childCardinality = v } }),
+                                 label: { c in
+                        let n = c == .zeroOrMore ? "zero or more" : c == .oneOrMore ? "one or more" : c == .zeroOrOne ? "zero or one" : "exactly one"
+                        return "\(n) \(child.name)"
+                    })
+                }
+                Labeled(label: "Each \(child.name)") {
+                    MBMenuPicker(options: r.kind == .identifying ? [false] : [false, true],
+                                 selection: Binding(get: { r.parentOptional }, set: { v in set("Change Relationship") { $0.parentOptional = v } }),
+                                 label: { $0 ? "may have a \(parent.name) (can be empty)" : "must have a \(parent.name)" })
+                }
+            }
+        }
+        Section(title: "Name") {
+            MBField(placeholder: "A verb: \(parent.name) … \(child.name)", text: Binding(get: { r.name }, set: { v in set("Name Relationship", coalesce: true) { $0.name = v } }))
+        }
+        if r.kind != .manyToMany {
+            let columns = child.attributes.filter { $0.foreignKey?.relationship == r.id }
+            Section(title: "Foreign key", trailing: columns.isEmpty ? "" : "\(columns.count)") {
+                if columns.isEmpty {
+                    Text("\(parent.name) has no primary key yet, so there is nothing to copy. Give it one and the column appears in \(child.name).")
+                        .font(.system(size: 11.5)).foregroundStyle(MB.orange).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(columns) { a in
+                            HStack(spacing: 6) {
+                                Text("\(child.tableName).\(a.columnName)").foregroundStyle(MB.text)
+                                Image(systemName: "arrow.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(MB.dim)
+                                Text("\(parent.tableName).\(store.diagram.source(of: a)?.column.columnName ?? "")").foregroundStyle(MB.muted)
+                            }
+                            .font(MB.mono).lineLimit(1)
+                        }
+                    }
+                }
+                Labeled(label: "When a \(parent.name) is deleted") {
+                    MBMenuPicker(options: ReferentialAction.allCases, selection: Binding(get: { r.onDelete }, set: { v in set("Change Rule") { $0.onDelete = v } }),
+                                 label: { Self.actionTitle($0, child: child.name) })
+                }
+                Labeled(label: "When its key changes") {
+                    MBMenuPicker(options: ReferentialAction.allCases, selection: Binding(get: { r.onUpdate }, set: { v in set("Change Rule") { $0.onUpdate = v } }),
+                                 label: { Self.actionTitle($0, child: child.name, update: true) })
+                }
+            }
+        }
+        Section(title: "") {
+            HStack(spacing: 8) {
+                if r.kind == .manyToMany {
+                    Button("Turn Into an Entity") {
+                        var made: UUID?
+                        store.edit("Turn Into an Entity") { made = $0.resolveManyToMany(r.id) }
+                        if let made { store.selection = .entities([made]) }
+                    }
+                    .buttonStyle(.mbQuiet)
+                    .help("Replaces this line by an entity in the middle, so you can give it attributes of its own")
+                } else if !own {
+                    Button("Swap Direction") { store.edit("Swap Direction") { $0.flip(relationship: r.id) } }.buttonStyle(.mbQuiet)
+                        .help("Makes \(child.name) the parent: the foreign key moves to \(parent.name)")
+                }
+                Button("Delete") { store.deleteSelection() }.buttonStyle(.mbDanger)
+            }
+        }
+    }
+
+    static func actionTitle(_ a: ReferentialAction, child: String, update: Bool = false) -> String {
+        switch a {
+        case .noAction: "Refuse (no action)"
+        case .restrict: "Refuse at once (restrict)"
+        case .cascade: update ? "Change it in \(child) too (cascade)" : "Delete its \(child) too (cascade)"
+        case .setNull: "Empty the column (set null)"
+        case .setDefault: "Use the column’s default (set default)"
+        }
+    }
+}
+
+// MARK: Domain, and several entities
+
+struct DomainInspector: View {
+    @ObservedObject var store: DiagramStore
+    let domain: Domain
+
+    private func bind(_ path: WritableKeyPath<Domain, String>, _ name: String) -> Binding<String> {
+        let id = domain.id
+        return Binding(get: { store.diagram.domain(id)?[keyPath: path] ?? "" }, set: { v in
+            store.edit(name, coalesce: "\(name)\(id)") { d in
+                // Attributes that use the domain follow its new name.
+                if path == \Domain.name, let old = d.domain(id)?.name, !old.isEmpty {
+                    for e in d.entities.indices {
+                        for a in d.entities[e].attributes.indices where d.entities[e].attributes[a].type.lowercased() == old.lowercased() {
+                            d.entities[e].attributes[a].type = v
+                        }
+                    }
+                }
+                d.update(domain: id) { $0[keyPath: path] = v }
+            }
+        })
+    }
+
+    var body: some View {
+        let uses = store.uses(of: domain)
+        Heading(kind: "Domain", title: domain.name.isEmpty ? "Untitled" : domain.name)
+        Text(uses == 0 ? "Not used yet. Type its name as an attribute’s type." : "Used by \(uses) \(uses == 1 ? "attribute" : "attributes").")
+            .font(.system(size: 12)).foregroundStyle(MB.dim).padding(.horizontal, 14).padding(.top, 3)
+        Section(title: "Domain") {
+            Labeled(label: "Name") { MBField(placeholder: "email", text: bind(\.name, "Rename Domain")) }
+            Labeled(label: "Type") { MBField(placeholder: "VARCHAR(255)", text: bind(\.type, "Change Domain Type"), mono: true) }
+            Labeled(label: "Definition") { MBTextArea(placeholder: "What it is for", text: bind(\.definition, "Change Definition")) }
+        }
+        Section(title: "") {
+            Button("Delete Domain") { store.deleteSelection() }.buttonStyle(.mbDanger)
+        }
+    }
+}
+
+struct MultiInspector: View {
+    @ObservedObject var store: DiagramStore
+    let count: Int
+
+    var body: some View {
+        Heading(kind: "Selection", title: "\(count) entities")
+        Section(title: "Align") {
+            HStack(spacing: 2) {
+                MBIconButton(symbol: "align.horizontal.left", help: "Left edges") { store.align(.left) }
+                MBIconButton(symbol: "align.horizontal.center", help: "Centres") { store.align(.centre) }
+                MBIconButton(symbol: "align.horizontal.right", help: "Right edges") { store.align(.right) }
+                MBIconButton(symbol: "align.vertical.top", help: "Top edges") { store.align(.top) }
+                MBIconButton(symbol: "align.vertical.center", help: "Middles") { store.align(.middle) }
+                MBIconButton(symbol: "align.vertical.bottom", help: "Bottom edges") { store.align(.bottom) }
+            }
+            HStack(spacing: 8) {
+                Button("Spread Across") { store.align(.spreadAcross) }.buttonStyle(.mbQuiet)
+                Button("Spread Down") { store.align(.spreadDown) }.buttonStyle(.mbQuiet)
+            }
+            Button("Tidy Up Selection") { store.tidyUp() }.buttonStyle(.mbQuiet)
+        }
+        Section(title: "") {
+            HStack(spacing: 8) {
+                Button("Duplicate") { store.duplicateSelection() }.buttonStyle(.mbQuiet)
+                Button("Delete") { store.deleteSelection() }.buttonStyle(.mbDanger)
+            }
+        }
+    }
+}

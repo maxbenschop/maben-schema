@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (debug)
+        run: swift build
+      - name: Build (release)
+        run: swift build -c release
+      - name: Tests
+        run: swift test
+      - name: Editing self-test (typing, dragging, undo, import, export; no window shows)
+        run: .build/debug/Schema --selftest
+      - name: A dump of four databases imports, and its rows are skipped
+        run: |
+          out=$(mktemp -d)
+          python3 Resources/make-sample-dump.py --scale 0.01 --out "$out"
+          .build/debug/Schema --inspect="$out/maben-sample-4-databases-postgres.sql" | tee "$out/pg.txt"
+          grep -q "^45 tables, 50 foreign keys" "$out/pg.txt"
+          .build/debug/Schema --inspect="$out/maben-sample-4-databases-mysql.sql" | tee "$out/my.txt"
+          grep -q "^45 tables, 51 foreign keys" "$out/my.txt"
+      - name: The sample exports as SQL, a picture and a file that opens again
+        run: |
+          out=$(mktemp -d)
+          .build/debug/Schema --export="$out/shop.sql" && grep -q "CREATE TABLE customer (" "$out/shop.sql"
+          .build/debug/Schema --export="$out/shop.pdf" && head -c 4 "$out/shop.pdf" | grep -q "%PDF"
+          .build/debug/Schema --export="$out/shop.mschema"
+          .build/debug/Schema --open="$out/shop.mschema" --export="$out/again.sql" && cmp "$out/shop.sql" "$out/again.sql"
+      - name: Scripts parse
+        run: |
+          zsh -n release.sh
+          zsh -n publish.sh
+          sh -n build.sh
+      - name: Version has a changelog entry
+        run: |
+          VERSION=$(plutil -extract CFBundleShortVersionString raw Info.plist)
+          grep -q "^## $VERSION " CHANGELOG.md || { echo "::error::CHANGELOG.md has no section for $VERSION"; exit 1; }

@@ -1,0 +1,42 @@
+# Xcode project for the release build only (./release.sh). Day-to-day building
+# uses SwiftPM (./build.sh). Generated with xcodegen; the .xcodeproj is not kept.
+name: MabenSchema
+options:
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ENABLE_HARDENED_RUNTIME: "YES"
+    DEBUG_INFORMATION_FORMAT: dwarf
+    DEAD_CODE_STRIPPING: "YES"
+targets:
+  MabenSchema:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/Schema
+      - path: build/AppIcon.icns
+        buildPhase: resources
+      - path: build/icon/Assets.car
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: Maben Schema
+        PRODUCT_MODULE_NAME: Schema
+        EXECUTABLE_NAME: Schema
+        PRODUCT_BUNDLE_IDENTIFIER: gg.maben.schema
+        INFOPLIST_FILE: build/Info-release.plist
+        GENERATE_INFOPLIST_FILE: "NO"
+    dependencies:
+      - target: SchemaCore
+  SchemaCore:
+    type: library.static
+    platform: macOS
+    sources: [Sources/SchemaCore]
+    settings:
+      base:
+        PRODUCT_NAME: SchemaCore
+        SKIP_INSTALL: "YES"
