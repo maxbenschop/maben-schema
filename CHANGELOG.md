@@ -3,7 +3,7 @@
 Every release of Maben Schema. The newest version is at the top. `publish.sh` uses the section for the version it
 releases as the GitHub release notes, and schema.maben.gg/changelog is built from this file.
 
-## 0.3 · not released yet
+## 0.3 · 26 November 2026
 
 - Activity diagrams, in the same file as the ER diagrams, each as a tab of its own (Diagram › New Activity Diagram, or the + beside the tabs): a start, actions, decisions and merges, forks and joins, an end and the end of one flow, objects, signals sent and received, a wait for a time, an action that is another activity, connectors, notes and text
 - Double-click the canvas for an action and type its name; drag a dot from one node to the next for an arrow, or let go on the empty canvas and the next action is made there; double-click an arrow to say when that way is taken
