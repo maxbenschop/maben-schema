@@ -46,6 +46,45 @@ public enum Report {
         return rows.map { $0.map(field).joined(separator: ",") }.joined(separator: "\n") + "\n"
     }
 
+    /// The data dictionary as a workbook: a sheet each for the entities, their attributes, the indexes, the
+    /// relationships and the domains. `SheetImport` reads it back.
+    public static func workbook(for d: Diagram) -> Workbook {
+        func yes(_ b: Bool) -> String { b ? "yes" : "" }
+        var entities = [["Entity", "Table", "Kind", "Group", "Other name 1", "Other name 2", "Attributes", "Definition"]]
+        var attributes = [["Entity", "Table", "Attribute", "Column", "Type", "Primary key", "Foreign key", "Not null", "Unique", "Default", "References", "Domain",
+                           "Other name 1", "Other name 2", "Definition"]]
+        var indexes = [["Entity", "Index", "Unique", "Attributes"]]
+        for e in d.entities {
+            entities.append([e.name, e.tableName, e.kind, e.package, e.alias1, e.alias2, "\(e.attributes.count)", e.definition])
+            for a in e.attributes {
+                let domain = d.domain(named: a.type)
+                attributes.append([e.name, e.tableName, a.name, a.columnName, d.resolvedType(a.type), yes(a.isPrimaryKey), yes(a.isForeignKey), yes(a.notNull), yes(a.unique),
+                                   a.defaultValue, referenceText(a, d), domain?.name ?? "", a.alias1, a.alias2, a.definition])
+            }
+            for index in e.indexes {
+                let names = index.attributes.compactMap { id in e.attributes.first { $0.id == id }?.name }
+                indexes.append([e.name, index.name, yes(index.unique), names.joined(separator: ", ")])
+            }
+        }
+        var relationships = [["Parent", "Child", "Kind", "Name", "Name the other way", "How many", "Parent required", "On delete", "On update", "Reads as", "Definition"]]
+        for r in d.relationships {
+            guard let p = d.entity(r.parent), let c = d.entity(r.child) else { continue }
+            let many = r.kind == .manyToMany ? "many" : r.childCardinality == .counted ? r.childCountText
+                : ["zeroOrMore": "0 or more", "oneOrMore": "1 or more", "zeroOrOne": "0 or 1", "exactlyOne": "1"][r.childCardinality.rawValue] ?? ""
+            relationships.append([p.name, c.name, kindText(r.kind), r.name, r.childName, many, yes(r.kind != .manyToMany && !r.parentOptional),
+                                  r.kind == .manyToMany ? "" : r.onDelete.sql, r.kind == .manyToMany ? "" : r.onUpdate.sql, sentence(r, parent: p, child: c), r.definition])
+        }
+        var domains = [["Domain", "Type", "A kind of", "Default", "Not null", "Definition"]]
+        for domain in d.domains {
+            domains.append([domain.name, d.resolvedType(domain.name), domain.parent.flatMap { d.domain($0)?.name } ?? "", domain.defaultValue, yes(domain.notNull), domain.definition])
+        }
+        var sheets = [Workbook.Sheet(name: "Entities", rows: entities), Workbook.Sheet(name: "Attributes", rows: attributes)]
+        if indexes.count > 1 { sheets.append(Workbook.Sheet(name: "Indexes", rows: indexes)) }
+        sheets.append(Workbook.Sheet(name: "Relationships", rows: relationships))
+        if domains.count > 1 { sheets.append(Workbook.Sheet(name: "Domains", rows: domains)) }
+        return Workbook(sheets: sheets)
+    }
+
     /// One relationship in plain words: "One Customer has zero or more Orders."
     public static func sentence(_ r: Relationship, parent: Entity, child: Entity) -> String {
         if r.kind == .manyToMany {

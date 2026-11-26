@@ -8,6 +8,7 @@ struct SQLPanel: View {
     @ObservedObject var store: DiagramStore
     @State private var copied = false
     @State private var dragStart: CGFloat?
+    @State private var showOptions = false
 
     /// The selected entities, or for a selected relationship the entity that holds its foreign key.
     private var highlighted: Set<UUID> {
@@ -31,6 +32,12 @@ struct SQLPanel: View {
                 Text("SQL").font(.system(size: 12, weight: .semibold)).foregroundStyle(MB.text)
                 MBSegmented(options: Dialect.allCases, selection: Binding(get: { store.diagram.dialect }, set: { v in store.edit("Change Database") { $0.dialect = v } }), label: \.title)
                 Spacer()
+                if store.sqlSelectedOnly, !store.selection.entityIDs.isEmpty {
+                    Text("\(store.selection.entityIDs.count) selected").font(.system(size: 11.5)).foregroundStyle(MB.dim)
+                }
+                Button("Options") { showOptions.toggle() }
+                    .buttonStyle(.mbQuiet)
+                    .popover(isPresented: $showOptions, arrowEdge: .top) { SQLOptionsView(store: store) }
                 Button(copied ? "Copied" : "Copy") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(store.sqlText, forType: .string)
@@ -47,6 +54,57 @@ struct SQLPanel: View {
             SQLTextView(sections: store.sqlSections, highlighted: highlighted)
         }
         .background(MB.bg)
+    }
+}
+
+/// How the SQL is written: kept with the diagram, so it is written the same way next time.
+struct SQLOptionsView: View {
+    @ObservedObject var store: DiagramStore
+
+    private func option<T>(_ path: WritableKeyPath<SQLOptions, T>) -> Binding<T> {
+        Binding(get: { store.diagram.sql[keyPath: path] }, set: { v in store.edit("Change SQL Options") { $0.sql[keyPath: path] = v } })
+    }
+
+    private static func keysTitle(_ k: SQLOptions.ForeignKeys) -> String {
+        switch k {
+        case .inTable: "In the table"
+        case .afterTables: "After the tables"
+        case .none: "Left out"
+        }
+    }
+
+    private static func commentsTitle(_ c: SQLOptions.Comments) -> String {
+        switch c {
+        case .definition: "Definitions"
+        case .name: "Names you read"
+        case .none: "None"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("How the SQL is written").font(.system(size: 13, weight: .semibold)).foregroundStyle(MB.text)
+            Toggle("Only the selected entities", isOn: $store.sqlSelectedOnly)
+            Toggle("DROP TABLE first, so it can be run again", isOn: option(\.dropTables))
+            Toggle("IF NOT EXISTS", isOn: option(\.ifNotExists))
+            Toggle("CREATE INDEX for indexes that aren’t unique", isOn: option(\.indexes))
+            Toggle("Every name in quotes", isOn: option(\.quoteNames))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Foreign keys").font(.system(size: 11.5)).foregroundStyle(MB.muted)
+                MBSegmented(options: SQLOptions.ForeignKeys.allCases, selection: option(\.foreignKeys), label: Self.keysTitle)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Comments").font(.system(size: 11.5)).foregroundStyle(MB.muted)
+                MBSegmented(options: SQLOptions.Comments.allCases, selection: option(\.comments), label: Self.commentsTitle)
+            }
+            Text("Copy and Save take what you see here.").font(.system(size: 11.5)).foregroundStyle(MB.dim)
+        }
+        .toggleStyle(.checkbox)
+        .font(.system(size: 12.5))
+        .foregroundStyle(MB.text)
+        .padding(16)
+        .frame(width: 330)
+        .background(MB.card)
     }
 }
 
@@ -109,6 +167,7 @@ struct SQLTextView: NSViewRepresentable {
     static let keywords: Set<String> = [
         "CREATE", "TABLE", "ALTER", "ADD", "CONSTRAINT", "PRIMARY", "KEY", "FOREIGN", "REFERENCES", "NOT", "NULL", "UNIQUE", "DEFAULT", "ON",
         "DELETE", "UPDATE", "CASCADE", "RESTRICT", "SET", "NO", "ACTION", "GENERATED", "ALWAYS", "AS", "IDENTITY", "AUTO_INCREMENT", "AUTOINCREMENT",
+        "DROP", "IF", "EXISTS", "INDEX",
     ]
 
     /// Keywords in the accent, comments and punctuation dim, strings green.

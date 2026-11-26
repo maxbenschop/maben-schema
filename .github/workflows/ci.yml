@@ -53,6 +53,14 @@ jobs:
           .build/debug/Schema --features --export="$out/all.mschema" && grep -q '"version" : 2' "$out/all.mschema"
           .build/debug/Schema --open="$out/all.mschema" --dialect=sqlite --export="$out/again.sql" && cmp "$out/all.sql" "$out/again.sql"
           .build/debug/Schema --features --export="$out/all.asta" && unzip -l "$out/all.asta" | grep -q " EntityStore$"
+      - name: The data dictionary is an Excel file that comes back as the same tables; SVG and the document are well-formed
+        run: |
+          out=$(mktemp -d)
+          .build/debug/Schema --export="$out/shop.xlsx" && unzip -tq "$out/shop.xlsx"
+          .build/debug/Schema --from-sheet="$out/shop.xlsx" --export="$out/back.sql" && grep -c "^CREATE TABLE" "$out/back.sql" | grep -q "^8$"
+          .build/debug/Schema --features --export="$out/all.svg" && xmllint --noout "$out/all.svg"
+          .build/debug/Schema --features --export="$out/all.html" && grep -q "<h2 id=\"person\">Person</h2>" "$out/all.html"
+          .build/debug/Schema --features --sql-options=drop,quote,after,ifnotexists --dialect=sqlite --export="$out/opts.sql" && sqlite3 :memory: < "$out/opts.sql"
       - name: Scripts parse
         run: |
           zsh -n release.sh
