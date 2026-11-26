@@ -547,15 +547,29 @@ struct EntityLook: View {
         store.edit(name, coalesce: "\(name)\(id)") { $0.update(entity: id, change) }
     }
 
+    // Spelled out, so the compiler has nothing to work out inside the view.
+    private static let levels: [DetailLevel?] = [nil, .all, .keys, .namesOnly]
+
+    private static func levelTitle(_ level: DetailLevel?) -> String {
+        switch level {
+        case nil: "As the rest of the diagram"
+        case .all?: "Everything"
+        case .keys?: "Keys only"
+        case .namesOnly?: "Its name only"
+        }
+    }
+
+    private var level: Binding<DetailLevel?> {
+        Binding(get: { entity.level }, set: { v in set("Change Detail") { $0.level = v } })
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HexColorPicker(label: "Fill", hex: entity.style.fill) { v in set("Change Colour") { $0.style.fill = v } }
             HexColorPicker(label: "Border", hex: entity.style.line) { v in set("Change Colour") { $0.style.line = v } }
             HexColorPicker(label: "Text", hex: entity.style.text) { v in set("Change Colour") { $0.style.text = v } }
             Labeled(label: "Shows") {
-                MBMenuPicker(options: [nil, DetailLevel.all, .keys, .namesOnly] as [DetailLevel?],
-                             selection: Binding(get: { entity.level }, set: { v in set("Change Detail") { $0.level = v } }),
-                             label: { $0 == nil ? "As the rest of the diagram" : $0 == .all ? "Everything" : $0 == .keys ? "Keys only" : "Its name only" })
+                MBMenuPicker(options: Self.levels, selection: level, label: Self.levelTitle)
             }
             let hidden = entity.attributes.filter(\.hidden).count
             if hidden > 0 {
@@ -751,6 +765,46 @@ struct RelationshipInspector: View {
         }
     }
 
+    // The choices that can also be "none", spelled out: their options, what each is called, and where it is kept.
+    private var discriminators: [UUID?] {
+        var out: [UUID?] = [nil]
+        for a in parent.attributes { out.append(a.id) }
+        return out
+    }
+
+    private func discriminatorTitle(_ id: UUID?) -> String {
+        guard let id, let a = parent.attributes.first(where: { $0.id == id }) else { return "Nothing" }
+        return a.name
+    }
+
+    private var discriminator: Binding<UUID?> {
+        Binding(get: { relationship.discriminator }, set: { v in set("Change Subtype") { $0.discriminator = v } })
+    }
+
+    private var keys: [UUID?] {
+        var out: [UUID?] = [nil]
+        for index in parent.indexes where index.unique && !index.attributes.isEmpty { out.append(index.id) }
+        return out
+    }
+
+    private func keyTitle(_ id: UUID?) -> String {
+        guard let id, let index = parent.indexes.first(where: { $0.id == id }) else { return "\(parent.name)’s primary key" }
+        return "the unique index \(index.name)"
+    }
+
+    private var key: Binding<UUID?> {
+        Binding(get: { relationship.parentIndex }, set: { v in set("Change Foreign Key") { $0.parentIndex = v } })
+    }
+
+    private var lowerText: Binding<String> {
+        Binding(get: { "\(relationship.childLower)" }, set: { v in set("Change Cardinality", coalesce: true) { $0.childLower = max(0, Int(v) ?? 0) } })
+    }
+
+    private var upperText: Binding<String> {
+        Binding(get: { relationship.childUpper <= 0 ? "" : "\(relationship.childUpper)" },
+                set: { v in set("Change Cardinality", coalesce: true) { $0.childUpper = max(0, Int(v) ?? 0) } })
+    }
+
     /// The five ways to say how many, the last one a number of your own.
     private static func countTitle(_ c: Cardinality, _ child: String) -> String {
         switch c {
@@ -779,9 +833,7 @@ struct RelationshipInspector: View {
         if r.kind == .subtype {
             Section(title: "Kinds") {
                 Labeled(label: "Told apart by") {
-                    MBMenuPicker(options: [nil] + parent.attributes.map { Optional($0.id) },
-                                 selection: Binding(get: { r.discriminator }, set: { v in set("Change Subtype") { $0.discriminator = v } }),
-                                 label: { id in id.flatMap { id in parent.attributes.first { $0.id == id }?.name } ?? "Nothing" })
+                    MBMenuPicker(options: discriminators, selection: discriminator, label: discriminatorTitle)
                 }
                 Toggle("Every \(parent.name) is one of its kinds", isOn: Binding(get: { r.complete }, set: { v in set("Change Subtype") { $0.complete = v } }))
                     .toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5)).foregroundStyle(MB.text)
@@ -797,9 +849,9 @@ struct RelationshipInspector: View {
                 if r.childCardinality == .counted {
                     HStack(spacing: 6) {
                         Text("at least").font(.system(size: 12)).foregroundStyle(MB.muted)
-                        MBField(placeholder: "1", text: Binding(get: { "\(r.childLower)" }, set: { v in set("Change Cardinality", coalesce: true) { $0.childLower = max(0, Int(v) ?? 0) } }), mono: true).frame(width: 52)
+                        MBField(placeholder: "1", text: lowerText, mono: true).frame(width: 52)
                         Text("at most").font(.system(size: 12)).foregroundStyle(MB.muted)
-                        MBField(placeholder: "any", text: Binding(get: { r.childUpper <= 0 ? "" : "\(r.childUpper)" }, set: { v in set("Change Cardinality", coalesce: true) { $0.childUpper = max(0, Int(v) ?? 0) } }), mono: true).frame(width: 52)
+                        MBField(placeholder: "any", text: upperText, mono: true).frame(width: 52)
                     }
                     Text("Leave “at most” empty for no limit. The same number twice is exactly that many.")
                         .font(.system(size: 11.5)).foregroundStyle(MB.dim).fixedSize(horizontal: false, vertical: true)
@@ -825,9 +877,7 @@ struct RelationshipInspector: View {
             Section(title: "Foreign key", trailing: columns.isEmpty ? "" : "\(columns.count)") {
                 if r.kind != .subtype, !unique.isEmpty {
                     Labeled(label: "Points at") {
-                        MBMenuPicker(options: [nil] + unique.map { Optional($0.id) },
-                                     selection: Binding(get: { r.parentIndex }, set: { v in set("Change Foreign Key") { $0.parentIndex = v } }),
-                                     label: { id in id.flatMap { id in unique.first { $0.id == id }.map { "the unique index \($0.name)" } } ?? "\(parent.name)’s primary key" })
+                        MBMenuPicker(options: keys, selection: key, label: keyTitle)
                     }
                 }
                 if columns.isEmpty {
@@ -947,9 +997,40 @@ struct DomainInspector: View {
         })
     }
 
+    private func parents(_ others: [Domain]) -> [UUID?] {
+        var out: [UUID?] = [nil]
+        for other in others { out.append(other.id) }
+        return out
+    }
+
+    private func parentTitle(_ id: UUID?) -> String {
+        guard let id, let found = store.diagram.domain(id) else { return "Nothing" }
+        return found.name
+    }
+
+    private var parent: Binding<UUID?> {
+        let id = domain.id
+        return Binding(get: { store.diagram.domain(id)?.parent }, set: { v in store.edit("Change Domain") { $0.update(domain: id) { $0.parent = v } } })
+    }
+
+    private var required: Binding<Bool> {
+        let id = domain.id
+        return Binding(get: { store.diagram.domain(id)?.notNull ?? false }, set: { v in store.edit("Change Domain") { $0.update(domain: id) { $0.notNull = v } } })
+    }
+
+    /// Every attribute whose type is this domain, with its entity.
+    private var users: [(Entity, Attribute)] {
+        var out: [(Entity, Attribute)] = []
+        let name = domain.name.lowercased()
+        for e in store.diagram.entities {
+            for a in e.attributes where !a.isForeignKey && a.type.lowercased() == name { out.append((e, a)) }
+        }
+        return out
+    }
+
     var body: some View {
         let d = store.diagram
-        let users = d.entities.flatMap { e in e.attributes.filter { !$0.isForeignKey && $0.type.lowercased() == domain.name.lowercased() }.map { (e, $0) } }
+        let users = self.users
         // A domain can't sit under itself or under one of its own children.
         let others = d.domains.filter { other in other.id != domain.id && !d.ancestors(of: other).contains { $0.id == domain.id } }
         Heading(kind: "Domain", title: domain.name.isEmpty ? "Untitled" : domain.name)
@@ -960,13 +1041,11 @@ struct DomainInspector: View {
             Labeled(label: "Type") { MBField(placeholder: domain.parent == nil ? "VARCHAR(255)" : "as its parent: \(d.resolvedType(domain.name))", text: bind(\.type, "Change Domain Type"), mono: true) }
             if !others.isEmpty || domain.parent != nil {
                 Labeled(label: "A narrower kind of") {
-                    MBMenuPicker(options: [nil] + others.map { Optional($0.id) },
-                                 selection: Binding(get: { domain.parent }, set: { v in store.edit("Change Domain") { $0.update(domain: domain.id) { $0.parent = v } } }),
-                                 label: { id in id.flatMap { d.domain($0)?.name } ?? "Nothing" })
+                    MBMenuPicker(options: parents(others), selection: parent, label: parentTitle)
                 }
             }
             Labeled(label: "Default") { MBField(placeholder: "none", text: bind(\.defaultValue, "Change Default"), mono: true) }
-            Toggle("Required (not null)", isOn: Binding(get: { domain.notNull }, set: { v in store.edit("Change Domain") { $0.update(domain: domain.id) { $0.notNull = v } } }))
+            Toggle("Required (not null)", isOn: required)
                 .toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5)).foregroundStyle(MB.text)
             Labeled(label: "Definition") { MBTextArea(placeholder: "What it is for", text: bind(\.definition, "Change Definition")) }
         }
