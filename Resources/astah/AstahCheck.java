@@ -9,8 +9,9 @@ import java.util.*;
 
 /**
  * Opens an .asta file with Astah itself (through its own API, no window) and writes what Astah found in it:
- * one line per entity, attribute, index, relationship and domain, in the form `Schema --export=x.astalist` writes
- * for the diagram the file came from. check.sh compares the two.
+ * one line per entity, attribute, index, relationship and domain, and per swimlane, node and arrow of each
+ * activity diagram, in the form `Schema --export=x.astalist` writes for the diagram the file came from.
+ * check.sh compares the two.
  *
  *   AstahCheck <file.asta> <listing.txt> [resaved.asta]
  *
@@ -21,6 +22,24 @@ import java.util.*;
 public class AstahCheck {
     static String yes(boolean b) { return b ? "yes" : "no"; }
     static String s(String v) { return v == null ? "" : v; }
+    // In the order they were made: the ids count up.
+    static final Comparator<INamedElement> byElement = Comparator.comparingLong(e -> Long.parseLong(e.getId().substring(0, e.getId().indexOf('-')), 36));
+
+    /** What a node of an activity diagram is, in the words the export uses. */
+    static String kind(IActivityNode n) {
+        if (n instanceof IObjectNode) return "object";
+        if (n instanceof IControlNode) {
+            IControlNode c = (IControlNode) n;
+            return c.isInitialNode() ? "initial" : c.isFlowFinalNode() ? "flowFinal" : c.isFinalNode() ? "final" : c.isForkNode() ? "fork" : c.isJoinNode() ? "join"
+                : c.isDecisionMergeNode() ? "decision" : c.isConnector() ? "connector" : "control";
+        }
+        if (n instanceof IAction) {
+            IAction x = (IAction) n;
+            return x.isSendSignalAction() ? "send" : x.isAcceptEventAction() ? "receive" : x.isAcceptTimeEventAction() ? "timer" : x.isConnector() ? "connector"
+                : x.isCallBehaviorAction() ? "call" : x.isProcess() ? "process" : "action";
+        }
+        return "node";
+    }
 
     public static void main(String[] a) throws Exception {
         ProjectAccessor pa = AstahAPI.getAstahAPI().getProjectAccessor();
@@ -95,6 +114,42 @@ public class AstahCheck {
                 else shapes++;
             }
             out.println("DIAGRAM " + dg.getNotation() + "|" + dg.getModelType() + "|boxes=" + boxes + "|lines=" + lines + "|notes=" + notes + "|about=" + anchors + "|texts=" + texts + "|shapes=" + shapes);
+        }
+        // Activity diagrams: what is on each, which swimlane everything is in, and every arrow with its condition.
+        List<INamedElement> flowcharts = new ArrayList<>(Arrays.asList(pa.findElements(IActivityDiagram.class)));
+        flowcharts.sort(byElement);
+        for (INamedElement d : flowcharts) {
+            IActivityDiagram dg = (IActivityDiagram) d;
+            IActivity act = dg.getActivity();
+            String name = dg.getName();
+            int notes = 0, anchors = 0, texts = 0;
+            for (IPresentation p : dg.getPresentations()) {
+                String type = p.getType();
+                if ("Note".equals(type)) notes++;
+                else if ("NoteAnchor".equals(type)) anchors++;
+                else if ("Text".equals(type)) texts++;
+            }
+            List<IPartition> lanes = new ArrayList<>();
+            for (IPartition top : act.getPartitions()) {
+                // The lanes are under the partition that stands for the row of them; left to right.
+                IPartition lane = null;
+                for (IPartition sub : top.getSubPartitions()) if (sub.getPreviousPartition() == null) lane = sub;
+                for (; lane != null; lane = lane.getNextPartition()) lanes.add(lane);
+            }
+            out.println("ACTIVITY " + name + "|nodes=" + act.getActivityNodes().length + "|flows=" + act.getFlows().length + "|lanes=" + lanes.size()
+                + "|notes=" + notes + "|about=" + anchors + "|texts=" + texts);
+            for (IPartition lane : lanes) {
+                List<String> inside = new ArrayList<>();
+                for (IActivityNode n : lane.getActivityNodes()) inside.add(s(n.getName()));
+                Collections.sort(inside);
+                out.println("LANE " + name + "|" + lane.getName() + "|" + String.join(",", inside));
+            }
+            List<IActivityNode> nodes = new ArrayList<>(Arrays.asList(act.getActivityNodes()));
+            nodes.sort(byElement);
+            for (IActivityNode n : nodes) out.println("NODE " + name + "|" + s(n.getName()) + "|" + kind(n) + "|" + s(n.getDefinition()));
+            List<IFlow> flows = new ArrayList<>(Arrays.asList(act.getFlows()));
+            flows.sort(byElement);
+            for (IFlow f : flows) out.println("FLOW " + name + "|" + s(f.getSource().getName()) + ">" + s(f.getTarget().getName()) + "|" + s(f.getGuard()));
         }
         out.close();
 

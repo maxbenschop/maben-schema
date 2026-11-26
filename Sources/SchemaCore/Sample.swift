@@ -145,6 +145,62 @@ public enum Sample {
         d.update(entity: contractor) { $0.position = Point(440, 320) }
         d.annotations = [Annotation(kind: .text, x: 80, y: 20, width: 200, height: 24, text: "Only the people")]
         d.activate(first)
+        d.activities = [orderFlow()]
         return d
+    }
+
+    /// An activity diagram with one of every kind of node, three swimlanes, arrows with a condition, an arrow
+    /// with a bend, a note about a step and a line of text.
+    public static func orderFlow() -> Activity {
+        var a = Activity(name: "Order flow")
+        a.lanes = [Lane(name: "Customer", width: 220), Lane(name: "Shop", width: 240), Lane(name: "Warehouse", width: 280)]
+        a.laneOrigin = Point(40, 40)
+        a.laneHeight = 640
+        func node(_ kind: ActivityNode.Kind, _ name: String, _ x: Double, _ y: Double) -> UUID {
+            let n = ActivityNode(kind: kind, name: name, at: Point(x, y))
+            a.nodes.append(n)
+            return n.id
+        }
+        let start = node(.initial, "", 150, 110)
+        let place = node(.action, "Place order", 150, 180)
+        let tell = node(.action, "Tell customer", 150, 360)
+        let stop = node(.flowFinal, "Stop", 150, 450)
+        let later = node(.timer, "After 3 days", 150, 540)
+        let order = node(.object, "Order", 380, 110)
+        let check = node(.action, "Check stock", 380, 180)
+        let choice = node(.decision, "", 380, 270)
+        let invoice = node(.send, "Send invoice", 380, 450)
+        let paid = node(.receive, "Payment received", 380, 540)
+        let on = node(.connector, "A", 380, 620)
+        let pack = node(.action, "Pack parcel", 630, 270)
+        let fork = node(.fork, "", 630, 340)
+        let label = node(.action, "Print label", 570, 400)
+        let courier = node(.action, "Book courier", 700, 400)
+        let join = node(.join, "", 630, 460)
+        let ship = node(.call, "Ship", 630, 530)
+        let end = node(.final, "", 630, 620)
+        let note = node(.note, "Only on work days", 680, 180)
+        _ = node(.text, "From order to parcel", 120, 22)
+        a.update(node: place) { $0.definition = "The customer sends the order." }
+        a.update(node: check) { $0.style.fill = "#CCFFCC" }
+        a.connect(start, place)
+        a.connect(place, check)
+        a.connect(order, check)
+        a.connect(check, choice)
+        a.connect(choice, pack, condition: "in stock")
+        if let id = a.connect(choice, tell, condition: "sold out") { a.update(flow: id) { $0.waypoints = [Point(380, 360)] } }
+        a.connect(tell, stop)
+        a.connect(pack, fork)
+        a.connect(fork, label)
+        a.connect(fork, courier)
+        a.connect(label, join)
+        a.connect(courier, join)
+        a.connect(join, ship)
+        a.connect(ship, end)
+        a.connect(later, invoice)
+        a.connect(invoice, paid)
+        a.connect(paid, on)
+        a.connect(note, pack)
+        return a
     }
 }

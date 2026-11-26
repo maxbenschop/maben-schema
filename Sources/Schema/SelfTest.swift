@@ -151,8 +151,158 @@ enum SelfTest {
 
         mouse(store, canvas)
 
-        print(failures == 0 ? "\nAll steps passed." : "\n\(failures) step(s) failed.")
-        exit(failures == 0 ? 0 : 1)
+        // An activity diagram has a canvas of its own, which the window makes once it is shown: a moment later.
+        store.load(Diagram())
+        store.newActivity()
+        Headless.after(0.6) {
+            activity(store)
+            print(failures == 0 ? "\nAll steps passed." : "\n\(failures) step(s) failed.")
+            exit(failures == 0 ? 0 : 1)
+        }
+    }
+
+    /// An activity diagram, made the way you would: with clicks and drags on its canvas, and typing in place.
+    static func activity(_ store: DiagramStore) {
+        guard let canvas = store.activityCanvas, let window = canvas.window else {
+            check(false, "an activity diagram shows on a canvas of its own")
+            return
+        }
+        check(store.diagram.shownActivity != nil && store.diagram.tabs.count == 2, "a new activity diagram is a tab beside the ER diagram")
+        canvas.zoomActual()
+        func shown() -> Activity { store.diagram.shownActivity ?? Activity(name: "") }
+        func event(_ type: NSEvent.EventType, _ p: CGPoint, clicks: Int = 1, flags: NSEvent.ModifierFlags = []) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: canvas.windowPoint(forCanvas: p), modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
+        }
+        func click(_ p: CGPoint, clicks: Int = 1, flags: NSEvent.ModifierFlags = []) {
+            canvas.mouseDown(with: event(.leftMouseDown, p, clicks: clicks, flags: flags))
+            canvas.mouseUp(with: event(.leftMouseUp, p, clicks: clicks, flags: flags))
+        }
+        func drag(from a: CGPoint, to b: CGPoint) {
+            canvas.mouseDown(with: event(.leftMouseDown, a))
+            for t in stride(from: 0.2, through: 1.0, by: 0.2) {
+                canvas.mouseDragged(with: event(.leftMouseDragged, CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)))
+            }
+            canvas.mouseUp(with: event(.leftMouseUp, b))
+        }
+        func middle(_ link: ActivityScene.Link) -> CGPoint {
+            let i = (link.points.count - 1) / 2
+            return CGPoint(x: (link.points[i].x + link.points[i + 1].x) / 2, y: (link.points[i].y + link.points[i + 1].y) / 2)
+        }
+        let undo = store.undoManager
+
+        // Double-click the sheet: an action, its name ready to type.
+        click(CGPoint(x: 300, y: 200), clicks: 2)
+        check(shown().nodes.count == 1 && shown().nodes[0].kind == .action && canvas.editTarget == .node(shown().nodes[0].id), "double-clicking the sheet makes an action and starts its name")
+        canvas.typeIntoEditor("Take order")
+        canvas.commitEdit()
+        let take = shown().nodes[0].id
+        check(shown().node(take)?.name == "Take order" && canvas.editTarget == nil, "the name is kept")
+        check(shown().node(take)?.position == Point(300, 200), "it sits where you clicked, on the grid")
+
+        // Pick the diamond in the strip, and click where it goes.
+        store.activityTool = .decision
+        click(CGPoint(x: 300, y: 320))
+        check(shown().nodes.count == 2 && shown().nodes[1].kind == .decision && store.activityTool == nil, "a picked shape goes where you click, and the pointer comes back")
+        let choice = shown().nodes[1].id
+
+        // Drag the action's bottom dot onto the diamond.
+        click(CGPoint(x: 300, y: 200))
+        check(store.activityParts == [take], "a click selects a node")
+        drag(from: store.activityScene!.box(take)!.handles[2], to: CGPoint(x: 300, y: 320))
+        check(shown().flows.count == 1 && shown().flows[0].from == take && shown().flows[0].to == choice, "dragging a dot onto another node draws an arrow")
+        check(store.activityScene?.links.first?.points.count == 2, "the arrow runs from edge to edge")
+
+        // Drag the diamond's right dot onto the empty sheet: the next action, with the arrow to it.
+        click(CGPoint(x: 300, y: 320))
+        drag(from: store.activityScene!.box(choice)!.handles[1], to: CGPoint(x: 520, y: 320))
+        check(shown().nodes.count == 3 && shown().flows.count == 2 && canvas.editTarget != nil, "letting go on the empty sheet makes the next action there")
+        canvas.typeIntoEditor("Ship it")
+        canvas.commitEdit()
+        let ship = shown().nodes[2].id
+        check(shown().node(ship)?.name == "Ship it" && shown().flows[1].to == ship, "and the arrow ends at it")
+        drag(from: store.activityScene!.box(ship)!.handles[3], to: CGPoint(x: 300, y: 320))
+        check(shown().flows.count == 3, "an arrow can go back the other way")
+        click(CGPoint(x: 300, y: 320))
+        drag(from: store.activityScene!.box(choice)!.handles[1], to: CGPoint(x: 520, y: 320))
+        check(shown().flows.count == 3 && shown().node(choice)?.position == Point(300, 320), "but not twice the same way")
+        undo?.undo()
+        check(shown().flows.count == 2, "undo takes the arrow away")
+
+        // Double-click an arrow: when that way is taken.
+        let line = store.activityScene!.links[1]
+        click(middle(line), clicks: 2)
+        check(canvas.editTarget == .flow(line.id), "double-clicking an arrow asks when that way is taken")
+        canvas.typeIntoEditor("[paid]")
+        canvas.commitEdit()
+        check(shown().flow(line.id)?.condition == "paid" && store.activityScene?.link(line.id)?.label == "[paid]", "the condition is kept, and drawn in square brackets")
+
+        // Drag the arrow: it bends through a point of your own.
+        let before = store.activityScene!.link(line.id)!
+        let grab = CGPoint(x: (before.points[0].x * 3 + before.points[1].x) / 4, y: before.points[0].y)
+        drag(from: grab, to: CGPoint(x: grab.x, y: grab.y + 60))
+        check(shown().flow(line.id)?.waypoints.count == 1, "dragging an arrow puts a point in it")
+        undo?.undo()
+        check(shown().flow(line.id)?.waypoints.isEmpty == true, "undo makes it straight again")
+
+        // Move a node.
+        drag(from: CGPoint(x: 520, y: 320), to: CGPoint(x: 560, y: 400))
+        check(shown().node(ship)?.position == Point(560, 400), "a node moves with the pointer, on the grid")
+        undo?.undo()
+        check(shown().node(ship)?.position == Point(520, 320), "and undo puts it back")
+
+        // Swimlanes: the first goes around what is there.
+        let customer = store.addLane()!
+        let shop = store.addLane()!
+        check(shown().lanes.count == 2 && shown().nodes.allSatisfy { shown().lane(of: $0)?.id == customer }, "the first swimlane goes around what is drawn")
+        canvas.beginEdit(.lane(customer))
+        canvas.typeIntoEditor("Customer")
+        canvas.commitEdit()
+        check(shown().lane(customer)?.name == "Customer", "a swimlane's name is typed in place")
+        let column = store.activityScene!.column(customer)!
+        let width = shown().lane(customer)!.width
+        drag(from: CGPoint(x: column.frame.maxX, y: column.frame.midY), to: CGPoint(x: column.frame.maxX + 50, y: column.frame.midY))
+        check(shown().lane(customer)?.width == width + 50, "dragging a swimlane's edge makes it wider")
+        let far = store.activityScene!.column(shop)!
+        drag(from: CGPoint(x: 560, y: 320), to: CGPoint(x: far.frame.midX, y: 320))
+        check(shown().lane(of: shown().node(ship)!)?.id == shop, "a node dragged into another swimlane is in that one")
+
+        // Copy, paste, delete.
+        let clipboard = NSPasteboard.withUniqueName()
+        store.pasteboard = clipboard
+        store.activityParts = [take, choice]
+        canvas.copy(nil)
+        canvas.paste(nil)
+        check(shown().nodes.count == 5 && shown().flows.count == 3, "copy and paste take nodes with the arrow between them")
+        undo?.undo()
+        store.activityParts = [choice]
+        store.deleteActivityParts()
+        check(shown().nodes.count == 2 && shown().flows.isEmpty, "deleting a node takes its arrows along")
+        undo?.undo()
+        check(shown().nodes.count == 3 && shown().flows.count == 2, "and undo brings them back")
+
+        // Right-click.
+        let box = store.activityScene!.box(take)!
+        let titles = canvas.menu(for: event(.rightMouseDown, CGPoint(x: box.frame.midX, y: box.frame.midY)))?.items.map(\.title) ?? []
+        check(titles.contains("Rename") && titles.contains("Make It"), "right-click on a node offers Rename and Make It")
+        store.setKind(.send, of: [take])
+        check(shown().node(take)?.kind == .send, "a node can become another kind")
+
+        // Pictures, the Astah export and the file.
+        let drawing = store.drawing
+        check(drawing is ActivityScene && (Picture.png(drawing, dark: false, transparent: false)?.count ?? 0) > 1000, "the picture is of the activity diagram being shown")
+        let svg = drawing.svg(dark: false, transparent: false)
+        check(svg.hasPrefix("<svg") && svg.contains(">Take order<") && svg.contains(">[paid]<"), "the SVG has the nodes and the condition as text")
+        let asta = AstaExport.data(for: store.diagram, layout: Scene(store.diagram).astaLayout, activities: ActivityScene.layouts(of: store.diagram))
+        check(asta.count > 4000 && asta.prefix(2) == Data("PK".utf8), "the Astah export takes the activity diagram along")
+        let back = try? Diagram.decode(store.diagram.encoded())
+        check(back == store.diagram, "the file reads back the same")
+
+        // The tabs.
+        store.showTab(store.diagram.sheetID)
+        check(store.diagram.activity == nil && store.diagram.activities.count == 1, "the ER diagram's tab shows the ER diagram again")
+        undo?.undo()
+        check(store.diagram.shownActivity != nil, "and undo goes back to the activity diagram")
     }
 
     /// The same, for the mouse: events are handed straight to the canvas, so the real pointer never moves.

@@ -832,10 +832,14 @@ public struct Diagram: Codable, Equatable {
     public var sheetIndex = 0
     /// Entities that are in the model but not on the diagram being shown.
     public var hidden: [UUID] = []
+    /// The activity diagrams in this file, in the order of their tabs.
+    public var activities: [Activity] = []
+    /// The activity diagram being shown. Nil: an ER diagram is.
+    public var activity: UUID?
 
     enum CodingKeys: String, CodingKey {
         case version, entities, relationships, domains, display, dialect, entityTypes, dataTypes, defaultType, annotations, sql
-        case sheets, sheetName, sheetID, sheetIndex, hidden
+        case sheets, sheetName, sheetID, sheetIndex, hidden, activities, activity
     }
 
     public init() { sheetID = Diagram.onlySheet }
@@ -859,6 +863,8 @@ public struct Diagram: Codable, Equatable {
         sheetID = try c.decodeIfPresent(UUID.self, forKey: .sheetID) ?? Diagram.onlySheet
         sheetIndex = try c.decodeIfPresent(Int.self, forKey: .sheetIndex) ?? 0
         hidden = try c.decodeIfPresent([UUID].self, forKey: .hidden) ?? []
+        activities = try c.decodeIfPresent([Activity].self, forKey: .activities) ?? []
+        activity = try c.decodeIfPresent(UUID.self, forKey: .activity)
     }
 
     /// The id of the diagram in a file that has only one.
@@ -886,6 +892,8 @@ public struct Diagram: Codable, Equatable {
             try a.container.encode(sheetID, forKey: .sheetID)
             try a.container.encode(sheetIndex, forKey: .sheetIndex)
         }
+        try a.put(activities, .activities, unless: [])
+        if let activity, !activities.isEmpty { try a.container.encode(activity, forKey: .activity) }
         // Last, when everything inside has said whether it needs the newer version.
         try a.container.encode(a.use?.newer == false ? 1 : Diagram.currentVersion, forKey: .version)
     }

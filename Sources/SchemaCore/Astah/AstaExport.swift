@@ -15,8 +15,9 @@ public struct Rect: Equatable {
     public var midY: Double { y + height / 2 }
 }
 
-/// Writes a diagram as an Astah Professional project (.asta) that Astah opens as an ER model with one ER diagram:
-/// the same entities, attributes, keys, types, relationships, positions and lines.
+/// Writes a diagram as an Astah Professional project (.asta) that Astah opens as an ER model with its ER diagrams:
+/// the same entities, attributes, keys, types, relationships, positions and lines. The file's activity diagrams
+/// go along as Astah activity diagrams (see `AstaActivity.swift`).
 ///
 /// The file is what Astah itself writes: a ZIP with one entry, `EntityStore`, holding its model as a stream of
 /// Java objects (see `JavaStream.swift`). The objects, and what each field holds when Astah saves them, are in
@@ -62,9 +63,11 @@ public enum AstaExport {
     public typealias Other = (diagram: Diagram, layout: Layout)
 
     /// `others`: the file's other diagrams (see `Diagram.showing`), each with its own layout. Astah gets a diagram
-    /// for each, all of the one model.
-    public static func data(for diagram: Diagram, layout: Layout = Layout(), options: Options = Options(), others: [Other] = []) -> Data {
-        let builder = AstaBuilder(diagram, layout, options, others: others)
+    /// for each, all of the one model. `activities`: where the nodes and arrows of each activity diagram are drawn,
+    /// by the diagram's id; one that isn't given is measured roughly.
+    public static func data(for diagram: Diagram, layout: Layout = Layout(), options: Options = Options(), others: [Other] = [],
+                            activities: [UUID: Layout] = [:]) -> Data {
+        let builder = AstaBuilder(diagram, layout, options, others: others, activities: activities)
         return Zip.archive([Zip.Entry(name: "EntityStore", data: builder.stream())], date: options.date)
     }
 
@@ -119,6 +122,7 @@ public enum AstaExport {
         // What is on the canvas beside the model: notes, the ones that are about something, text (a shape's label is
         // text too), and rectangles and straight lines.
         for view in [d] + d.sheets.map({ d.showing($0.id) }) { out.append(diagramLine(view)) }
+        for activity in d.activities { out.append(contentsOf: activityLines(activity)) }
         return out.joined(separator: "\n") + "\n"
     }
 
@@ -191,9 +195,10 @@ public enum AstaExport {
 
 /// Builds the objects of one .asta file.
 final class AstaBuilder {
-    private let diagram: Diagram
+    let diagram: Diagram
     private let layout: AstaExport.Layout
     private let others: [AstaExport.Other]
+    let activityLayouts: [UUID: AstaExport.Layout]
     private let options: AstaExport.Options
 
     private static let classes: [String: JClass] = AstaBuilder.parseClasses()
@@ -212,18 +217,28 @@ final class AstaBuilder {
         "ERRelationshipEndImp", "ERSubtypeRelationshipImp", "UConstraintImp", "UElementOwnershipImp", "UTaggedValueImp",
         "UERDiagramImp", "EREntityPresentation", "ERRelationshipPresentation", "ERSubtypeRelationshipPresentation", "TextPresentation",
         "UCommentImp", "NotePresentation", "NoteAnchorPresentation", "RectPresentation", "LinePresentation",
+        // Activity diagrams.
+        "UActivityGraphImp", "UActivityDiagramImp", "FramePresentation", "UCompositeStateImp", "UPartitionImp", "SwimlanePresentation",
+        "UPseudostateImp", "UActionStateImp", "UActionImp", "UFinalStateImp", "UObjectFlowStateImp", "UClassifierInStateImp",
+        "USubactivityStateImp", "UTransitionImp", "UGuardImp", "JUStereotypeImp", "InitialStatePresentation", "ActionStatePresentation",
+        "FinalStatePresentation", "MergePresentation", "ForkPresentation", "JoinPresentation", "ObjectFlowStatePresentation",
+        "SubactivityStatePresentation", "TransitionPresentation",
     ]
     /// Astah saves these as "not changed"; everything else as changed. Kept as it writes them.
     private static let unchanged: Set<String> = [
         "EREntityImp", "EREntityPresentation", "ERRelationshipImp", "ERSubtypeRelationshipImp", "UBooleanExpression", "UExpression",
         "UCommentImp", "NotePresentation",
+        "UActivityDiagramImp", "SwimlanePresentation", "UPartitionImp", "UPseudostateImp", "TransitionPresentation", "UTransitionImp",
+        "UActionStateImp", "UFinalStateImp", "UObjectFlowStateImp", "USubactivityStateImp",
     ]
     private static let observable = "JP.co.esm.caddies.uml.util.ExObservable"
 
-    init(_ diagram: Diagram, _ layout: AstaExport.Layout, _ options: AstaExport.Options, others: [AstaExport.Other] = []) {
+    init(_ diagram: Diagram, _ layout: AstaExport.Layout, _ options: AstaExport.Options, others: [AstaExport.Other] = [],
+         activities: [UUID: AstaExport.Layout] = [:]) {
         self.diagram = diagram
         self.layout = layout
         self.others = others
+        activityLayouts = activities
         self.options = options
         let given = options.identifier.lowercased().filter(\.isHexDigit)
         suffix = given.count == 32 ? given : UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
@@ -276,7 +291,7 @@ final class AstaBuilder {
         return short
     }
 
-    private func cls(_ short: String) -> JClass {
+    func cls(_ short: String) -> JClass {
         guard let c = Self.classes[short] else { preconditionFailure("No class \(short) in the table") }
         return c
     }
@@ -289,7 +304,7 @@ final class AstaBuilder {
     }
 
     /// A new object with every field as Astah has it in a fresh file; the caller sets what differs.
-    private func make(_ short: String) -> JObject {
+    func make(_ short: String) -> JObject {
         let c = cls(short)
         let o = bare(short)
         for i in 0..<c.depth {
@@ -312,7 +327,7 @@ final class AstaBuilder {
     }
 
     /// An object with nothing filled in.
-    private func bare(_ short: String) -> JObject {
+    func bare(_ short: String) -> JObject {
         let o = JObject(cls(short))
         made.append(o)
         return o
@@ -357,7 +372,7 @@ final class AstaBuilder {
     }
 
     /// One of Astah's fixed values (public, private, instance, none): a single object, shared by all that use it.
-    private func kind(_ short: String, _ label: String) -> JObject {
+    func kind(_ short: String, _ label: String) -> JObject {
         let key = short + ":" + label
         if let k = kinds[key] { return k }
         let o = bare(short)
@@ -366,19 +381,19 @@ final class AstaBuilder {
         return o
     }
 
-    private func text(_ short: String, _ body: String) -> JValue {
+    func text(_ short: String, _ body: String) -> JValue {
         let o = bare(short)
         o["body"] = .string(body)
         return .object(o)
     }
 
-    private func long(_ value: Int64) -> JObject {
+    func long(_ value: Int64) -> JObject {
         let o = bare("Long")
         o["value"] = .long(value)
         return o
     }
 
-    private func point(_ short: String, _ x: Double, _ y: Double) -> JObject {
+    func point(_ short: String, _ x: Double, _ y: Double) -> JObject {
         let o = bare(short)
         o["x"] = .double(x)
         o["y"] = .double(y)
@@ -389,23 +404,23 @@ final class AstaBuilder {
         return o
     }
 
-    private func points(_ list: [Point]) -> JValue {
+    func points(_ list: [Point]) -> JValue {
         .array(JArray(cls("[LJP.co.esm.caddies.golf.geom2D.Pnt2d;"), list.map { .object(point("Pnt2d", $0.x, $0.y)) }))
     }
 
-    private func append(_ item: JObject, to owner: JObject, _ field: String) {
+    func append(_ item: JObject, to owner: JObject, _ field: String) {
         guard let list = owner[field].object else { preconditionFailure("\(owner.cls.shortName).\(field) is not a list") }
         list.items.append(.object(item))
     }
 
-    private func map(_ pairs: [(String, String)]) -> JValue {
+    func map(_ pairs: [(String, String)]) -> JValue {
         let m = make("HashMap")
         for (k, v) in pairs { m.items.append(.string(k)); m.items.append(.string(v)) }
         return .object(m)
     }
 
     /// Whoever draws a model element listens to it, and Astah saves the listeners with it.
-    private func observe(_ subject: JObject, by listener: JObject) {
+    func observe(_ subject: JObject, by listener: JObject) {
         var list = subject.annotations[Self.observable] ?? [.value(.null)]
         list.insert(.value(.object(listener)), at: max(0, list.count - 1))
         subject.annotations[Self.observable] = list
@@ -413,7 +428,7 @@ final class AstaBuilder {
 
     // MARK: Model pieces
 
-    private func named(_ short: String, _ name: String, definition: String = "") -> JObject {
+    func named(_ short: String, _ name: String, definition: String = "") -> JObject {
         let o = make(short)
         o["name"] = text("UName", name)
         o["definition"] = text("UUninterpreted", definition)
@@ -421,7 +436,7 @@ final class AstaBuilder {
     }
 
     @discardableResult
-    private func tag(_ owner: JObject, _ name: String, _ value: String) -> JObject {
+    func tag(_ owner: JObject, _ name: String, _ value: String) -> JObject {
         let t = make("UTaggedValueImp")
         t["invTaggedValue"] = .object(owner)
         t["tag"] = text("UName", name)
@@ -430,7 +445,7 @@ final class AstaBuilder {
         return t
     }
 
-    private func own(_ namespace: JObject, _ element: JObject) {
+    func own(_ namespace: JObject, _ element: JObject) {
         let o = make("UElementOwnershipImp")
         o["namespace"] = .object(namespace)
         o["ownedElement"] = .object(element)
@@ -711,6 +726,7 @@ final class AstaBuilder {
         for other in others {
             draw(other.diagram, other.layout, named: other.diagram.sheetName, in: schema, entityObjects, relationshipObjects, attributeObjects)
         }
+        for activity in diagram.activities { draw(activity, in: project) }
 
         let info = make("ModelManageInfo")
         info["lastModifiedTime"] = .long(Int64(options.date.timeIntervalSince1970 * 1000))
@@ -775,6 +791,7 @@ final class AstaBuilder {
         let off = Set(view.hidden)
         let display = view.display
         let sheet = named("UERDiagramImp", name)
+        sheet["type"] = .string("ER Diagram")
         own(schema, sheet)
         sheet["notation"] = .string(display.notation == .ie ? "IE" : "IDEF1X")
         sheet["modelType"] = .string(display.names == .physical ? "Physical Model" : "Logical Model")
@@ -974,7 +991,7 @@ final class AstaBuilder {
     }
 
     /// Puts a box-shaped thing (a note, text, a rectangle) on the view.
-    private func place(_ o: JObject, on sheet: JObject, depth: Int32, _ frame: Rect) {
+    func place(_ o: JObject, on sheet: JObject, depth: Int32, _ frame: Rect) {
         o["diagram"] = .object(sheet)
         o["depth"] = .int(depth)
         o["changeId"] = .object(long(3))

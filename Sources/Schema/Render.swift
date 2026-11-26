@@ -641,18 +641,18 @@ enum Renderer {
 enum Picture {
     /// A view that draws the whole diagram, for PDF and PNG.
     final class View: NSView {
-        let scene: Scene
+        let scene: any Drawing
         let transparent: Bool
         let margin: CGFloat
         let scale: CGFloat
         let area: CGRect
 
-        init(scene: Scene, transparent: Bool, margin: CGFloat = 40, scale: CGFloat = 1) {
+        init(scene: any Drawing, transparent: Bool, margin: CGFloat = 40, scale: CGFloat = 1) {
             self.scene = scene
             self.transparent = transparent
             self.margin = margin
             self.scale = scale
-            area = (scene.bounds() ?? CGRect(x: 0, y: 0, width: 400, height: 240)).insetBy(dx: -margin, dy: -margin).integral
+            area = (scene.extent() ?? CGRect(x: 0, y: 0, width: 400, height: 240)).insetBy(dx: -margin, dy: -margin).integral
             super.init(frame: CGRect(x: 0, y: 0, width: area.width * scale, height: area.height * scale))
         }
 
@@ -669,30 +669,30 @@ enum Picture {
             ctx.saveGState()
             ctx.scaleBy(x: scale, y: scale)
             ctx.translateBy(x: -area.minX, y: -area.minY)
-            Renderer.draw(scene, state: RenderState(), background: background)
+            scene.draw(background: background)
             ctx.restoreGState()
         }
     }
 
     static func appearance(dark: Bool) -> NSAppearance { NSAppearance(named: dark ? .darkAqua : .aqua)! }
 
-    static func pdf(_ scene: Scene, dark: Bool, transparent: Bool) -> Data {
+    static func pdf(_ scene: any Drawing, dark: Bool, transparent: Bool) -> Data {
         let view = View(scene: scene, transparent: transparent)
         view.appearance = appearance(dark: dark)
         return view.dataWithPDF(inside: view.bounds)
     }
 
-    static func png(_ scene: Scene, dark: Bool, transparent: Bool, scale: CGFloat = 2) -> Data? {
+    static func png(_ scene: any Drawing, dark: Bool, transparent: Bool, scale: CGFloat = 2) -> Data? {
         bitmap(scene, dark: dark, transparent: transparent, scale: scale)?.representation(using: .png, properties: [:])
     }
 
     /// A JPEG has no see-through: it always gets the background.
-    static func jpeg(_ scene: Scene, dark: Bool, scale: CGFloat = 2) -> Data? {
+    static func jpeg(_ scene: any Drawing, dark: Bool, scale: CGFloat = 2) -> Data? {
         bitmap(scene, dark: dark, transparent: false, scale: scale)?.representation(using: .jpeg, properties: [.compressionFactor: 0.9])
     }
 
     /// The diagram as dots: `scale` of them per point each way, whatever screen the Mac has.
-    private static func bitmap(_ scene: Scene, dark: Bool, transparent: Bool, scale: CGFloat) -> NSBitmapImageRep? {
+    private static func bitmap(_ scene: any Drawing, dark: Bool, transparent: Bool, scale: CGFloat) -> NSBitmapImageRep? {
         let view = View(scene: scene, transparent: transparent)
         view.appearance = appearance(dark: dark)
         let size = view.bounds.size
@@ -710,7 +710,7 @@ enum Picture {
     /// The diagram on paper: on one page, made to fit, or at its own size over as many pages as it takes, with the
     /// title, the date and the page number in the margins when asked.
     final class PrintView: NSView {
-        let scene: Scene
+        let scene: any Drawing
         let title: String
         let area: CGRect
         var fit: Bool
@@ -719,12 +719,12 @@ enum Picture {
         private var columns = 1, rows = 1
         private var scale: CGFloat = 1
 
-        init(scene: Scene, title: String, fit: Bool, marks: Bool) {
+        init(scene: any Drawing, title: String, fit: Bool, marks: Bool) {
             self.scene = scene
             self.title = title
             self.fit = fit
             self.marks = marks
-            area = (scene.bounds() ?? CGRect(x: 0, y: 0, width: 400, height: 240)).insetBy(dx: -20, dy: -20).integral
+            area = (scene.extent() ?? CGRect(x: 0, y: 0, width: 400, height: 240)).insetBy(dx: -20, dy: -20).integral
             super.init(frame: CGRect(origin: .zero, size: area.size))
             appearance = Picture.appearance(dark: false)
         }
@@ -769,7 +769,7 @@ enum Picture {
             }
             ctx.scaleBy(x: scale, y: scale)
             ctx.translateBy(x: -area.minX, y: -area.minY)
-            Renderer.draw(scene, state: RenderState(), background: .white)
+            scene.draw(background: .white)
             ctx.restoreGState()
         }
 

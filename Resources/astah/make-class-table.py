@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Writes Sources/SchemaCore/Astah/AstaClasses.swift from .asta files saved by Astah Professional.
 
-    python3 Resources/astah/make-class-table.py sample1.asta [sample2.asta …]
+    python3 Resources/astah/make-class-table.py er1.asta [er2.asta …] [-- activity1.asta …]
 
 An .asta file is a ZIP with one entry, EntityStore: a stream of Java objects. The stream describes every class
 in it (name, serialVersionUID, fields); this script collects those descriptions, and for every field what it
@@ -9,8 +9,10 @@ holds in the samples: always the same value, an empty list, nothing, or somethin
 "!", which the exporter then sets itself).
 
 The samples must have at least one of everything the exporter writes: entities of each kind, attributes with a
-length, a default and a domain, an index, every kind of relationship and a diagram with them on it. A class or a
-field that is missing from the samples is missing from the table. Run it again after a new version of Astah
+length, a default and a domain, an index, every kind of relationship and a diagram with them on it, and an
+activity diagram with every kind of node, a flow with a condition, swimlanes and a note. A class or a field that is
+missing from the samples is missing from the table. The samples with ER diagrams come first; the ones after `--`
+add their classes without changing the numbers the first ones settled. Run it again after a new version of Astah
 changes its model version, and run check.sh afterwards.
 """
 import json, os, re, struct, sys, zipfile
@@ -151,7 +153,14 @@ def kind(tc, v):
 def main(samples):
     classes = OrderedDict()
     seen = {}
+    # What a field held in the samples up to and including the last one named before `--`: a number to fall back
+    # on comes from those, so adding samples for another kind of diagram leaves what is written for the first alone.
+    first = {}
+    counting = True
     for path in samples:
+        if path == '--':
+            counting = False
+            continue
         reader = Reader(load(path)['EntityStore'], 4)   # Astah puts four bytes of its own after the stream's header
         reader.contents()
         for h in reader.handles:
@@ -159,7 +168,10 @@ def main(samples):
             if isinstance(h, Obj):
                 for c in h.desc.chain():
                     for tc, name, _ in c.fields:
-                        if c.name in h.data: seen.setdefault((c.name, name), Counter())[kind(tc, h.data[c.name][name])] += 1
+                        if c.name in h.data:
+                            what = kind(tc, h.data[c.name][name])
+                            seen.setdefault((c.name, name), Counter())[what] += 1
+                            if counting: first.setdefault((c.name, name), Counter())[what] += 1
     lines = []
     for name, d in classes.items():
         lines.append(f'{name} {d.uid} {d.flags} {d.super.name if d.super else "-"}')
@@ -170,7 +182,8 @@ def main(samples):
                 preset = next(iter(kinds))
             else:
                 # It differs: the exporter sets it. A number keeps its most common value to fall back on.
-                common = found.most_common(1)[0][0] if found else ''
+                counted = first.get((name, field)) or found
+                common = counted.most_common(1)[0][0] if counted else ''
                 preset = '!' + (common if common.startswith('p:') else '')
             if field == 'text' and signature == 'Ljava/lang/String;': preset = '!'
             lines.append(f' {tc} {field} {signature if signature else "-"} {preset}'.rstrip())

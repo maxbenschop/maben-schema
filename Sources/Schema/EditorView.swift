@@ -7,25 +7,29 @@ struct EditorView: View {
     @ObservedObject var store: DiagramStore
 
     var body: some View {
+        // An activity diagram has its own canvas, list and inspector; the SQL belongs to the ER diagrams.
+        let activity = store.diagram.shownActivity != nil
         VStack(spacing: 0) {
             TitleBar(store: store)
             Hairline()
             HStack(spacing: 0) {
                 if store.showSidebar {
-                    Sidebar(store: store).frame(width: 240).background(MB.sidebar)
+                    if activity { ActivitySidebar(store: store).frame(width: 240).background(MB.sidebar) }
+                    else { Sidebar(store: store).frame(width: 240).background(MB.sidebar) }
                     Hairline(vertical: true)
                 }
                 VStack(spacing: 0) {
-                    CanvasArea(store: store)
-                    if store.diagram.hasSeveralSheets { SheetTabs(store: store) }
-                    if store.showSQL {
+                    if activity { ActivityArea(store: store) } else { CanvasArea(store: store) }
+                    if store.diagram.hasSeveralTabs { SheetTabs(store: store) }
+                    if store.showSQL, !activity {
                         SQLPanel(store: store).frame(height: store.sqlHeight)
                     }
                 }
                 .frame(maxWidth: .infinity)
                 if store.showInspector {
                     Hairline(vertical: true)
-                    Inspector(store: store).frame(width: 300).background(MB.sidebar)
+                    if activity { ActivityInspector(store: store).frame(width: 300).background(MB.sidebar) }
+                    else { Inspector(store: store).frame(width: 300).background(MB.sidebar) }
                 }
             }
         }
@@ -47,7 +51,8 @@ struct EditorView: View {
     }
 }
 
-/// The diagrams of this model, as tabs under the canvas. They only show once there is more than one.
+/// The diagrams in this file, as tabs under the canvas: the ER diagrams of the model, then the activity diagrams.
+/// They only show once there is more than one.
 struct SheetTabs: View {
     @ObservedObject var store: DiagramStore
 
@@ -56,19 +61,22 @@ struct SheetTabs: View {
             Hairline()
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
-                    ForEach(store.diagram.sheetTabs, id: \.id) { tab in
-                        SheetTab(store: store, id: tab.id, name: tab.name)
+                    ForEach(store.diagram.tabs, id: \.id) { tab in
+                        SheetTab(store: store, id: tab.id, name: tab.name, activity: tab.isActivity)
                     }
                     Menu {
-                        Button("Empty") { store.newSheet(.empty) }
-                        Button("With Every Entity") { store.newSheet(.everything) }
-                        Button("With the Selected Entities") { store.newSheet(.selection) }.disabled(store.selection.entityIDs.isEmpty)
-                        Button("A Copy of This One") { store.newSheet(.copy) }
+                        SwiftUI.Section("ER diagram of this model") {
+                            Button("Empty") { store.newSheet(.empty) }
+                            Button("With Every Entity") { store.newSheet(.everything) }
+                            Button("With the Selected Entities") { store.newSheet(.selection) }.disabled(store.selection.entityIDs.isEmpty)
+                            Button("A Copy of This One") { store.newSheet(.copy) }.disabled(store.diagram.activity != nil)
+                        }
+                        Button("Activity Diagram") { store.newActivity() }
                     } label: {
                         Image(systemName: "plus").font(.system(size: 11, weight: .semibold)).foregroundStyle(MB.muted).frame(width: 26, height: 24).contentShape(Rectangle())
                     }
                     .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                    .help("New diagram of this model")
+                    .help("New diagram")
                     .accessibilityLabel("New diagram")
                 }
                 .padding(.horizontal, 8)
@@ -83,15 +91,17 @@ struct SheetTab: View {
     @ObservedObject var store: DiagramStore
     let id: UUID
     let name: String
+    var activity = false
     @State private var hovering = false
 
     var body: some View {
-        let on = store.diagram.sheetID == id
-        Button { store.showSheet(id) } label: {
-            Text(name)
-                .font(.system(size: 12, weight: on ? .semibold : .regular))
+        let on = store.diagram.shownTab == id
+        Button { store.showTab(id) } label: {
+            HStack(spacing: 5) {
+                if activity { Image(systemName: "arrow.triangle.branch").font(.system(size: 9.5, weight: .semibold)) }
+                Text(name).font(.system(size: 12, weight: on ? .semibold : .regular)).lineLimit(1)
+            }
                 .foregroundStyle(on ? MB.text : MB.muted)
-                .lineLimit(1)
                 .padding(.horizontal, 11).frame(height: 24)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(on ? MB.selected : hovering ? MB.hover : .clear))
                 .contentShape(Rectangle())
@@ -99,9 +109,10 @@ struct SheetTab: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .accessibilityAddTraits(on ? .isSelected : [])
+        .accessibilityLabel(activity ? "\(name), activity diagram" : name)
         .contextMenu {
-            Button("Rename…") { store.renameSheet(id) }
-            Button("Delete", role: .destructive) { store.removeSheet(id) }
+            Button("Rename…") { store.renameTab(id) }
+            Button("Delete", role: .destructive) { store.removeTab(id) }.disabled(!activity && !store.diagram.hasSeveralSheets)
         }
     }
 }
@@ -121,22 +132,36 @@ struct TitleBar: View {
             .padding(.leading, 6)
             .layoutPriority(1)
             Spacer(minLength: 12)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { notation; names }
-                notation
-                EmptyView()
-            }
-            Button { store.newEntity() } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "plus").font(.system(size: 10, weight: .bold))
-                    Text("Entity")
+            if store.diagram.activity == nil {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { notation; names }
+                    notation
+                    EmptyView()
                 }
+                Button { store.newEntity() } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "plus").font(.system(size: 10, weight: .bold))
+                        Text("Entity")
+                    }
+                }
+                .buttonStyle(.mbPrimary)
+                .help("New entity (⇧⌘N). Or double-click the canvas.")
+                .padding(.leading, 4)
+            } else {
+                Button { store.addNode(.action) } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "plus").font(.system(size: 10, weight: .bold))
+                        Text("Action")
+                    }
+                }
+                .buttonStyle(.mbPrimary)
+                .help("New action. Or double-click the canvas.")
+                .padding(.leading, 4)
             }
-            .buttonStyle(.mbPrimary)
-            .help("New entity (⇧⌘N). Or double-click the canvas.")
-            .padding(.leading, 4)
             MBIconButton(symbol: "magnifyingglass", help: "Find an entity or a command (⌘K)") { store.palette = true }
-            MBIconButton(symbol: "chevron.left.forwardslash.chevron.right", help: "Show or hide the SQL (⌥⌘S)", active: store.showSQL) { store.showSQL.toggle() }
+            if store.diagram.activity == nil {
+                MBIconButton(symbol: "chevron.left.forwardslash.chevron.right", help: "Show or hide the SQL (⌥⌘S)", active: store.showSQL) { store.showSQL.toggle() }
+            }
             MBIconButton(symbol: "sidebar.right", help: "Show or hide the inspector (⌥⌘I)") { store.showInspector.toggle() }
         }
         .padding(.trailing, 10)
@@ -205,16 +230,16 @@ struct CanvasArea: View {
 
     private var zoomControl: some View {
         HStack(spacing: 0) {
-            MBIconButton(symbol: "minus", help: "Zoom out (⌘−)") { store.canvas?.zoomOut() }
-            Button { store.canvas?.zoomActual() } label: {
+            MBIconButton(symbol: "minus", help: "Zoom out (⌘−)") { store.zoomOut() }
+            Button { store.zoomActual() } label: {
                 Text("\(Int((store.zoom * 100).rounded()))%")
                     .font(.system(size: 11.5, weight: .medium)).monospacedDigit()
                     .foregroundStyle(MB.muted).frame(width: 44, height: 26).contentShape(Rectangle())
             }
             .buttonStyle(.plain).help("Actual size (⌘0)")
-            MBIconButton(symbol: "plus", help: "Zoom in (⌘+)") { store.canvas?.zoomIn() }
+            MBIconButton(symbol: "plus", help: "Zoom in (⌘+)") { store.zoomIn() }
             Hairline(vertical: true).frame(height: 16).padding(.horizontal, 2)
-            MBIconButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Zoom to fit (⌘1)") { store.canvas?.zoomToFit() }
+            MBIconButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Zoom to fit (⌘1)") { store.zoomToFit() }
             MBIconButton(symbol: "map", help: "Show or hide the map of the whole diagram (⌥⌘M)", active: showMap) { showMap.toggle() }
         }
         .padding(2)
@@ -538,7 +563,21 @@ struct PaletteView: View {
         let q = query.lowercased().trimmingCharacters(in: .whitespaces)
         let store = self.store
         var list: [Item] = store.diagram.entities.map { e in
-            Item(id: e.id.uuidString, title: e.name, detail: "entity · \(e.attributes.count) attributes", symbol: "rectangle.split.3x1") { store.select(entity: e.id) }
+            Item(id: e.id.uuidString, title: e.name, detail: "entity · \(e.attributes.count) attributes", symbol: "rectangle.split.3x1") {
+                // An entity is found on the ER diagram, whatever is being shown.
+                if store.diagram.activity != nil { store.showSheet(store.diagram.sheetID) }
+                store.select(entity: e.id)
+            }
+        }
+        // Activity diagrams, and the nodes of the one being shown.
+        for a in store.diagram.activities {
+            list.append(Item(id: a.id.uuidString, title: a.name, detail: "activity diagram", symbol: "arrow.triangle.branch") { store.showTab(a.id) })
+        }
+        for n in store.diagram.shownActivity?.nodes ?? [] where !n.name.isEmpty {
+            list.append(Item(id: n.id.uuidString, title: n.name.replacingOccurrences(of: "\n", with: " "), detail: n.kind.title.lowercased(), symbol: n.kind.symbol) {
+                store.activityParts = [n.id]
+                store.activityCanvas?.reveal([n.id])
+            })
         }
         // Attributes too, once you've typed something: "email" finds Customer.
         if !q.isEmpty {
@@ -561,6 +600,7 @@ struct PaletteView: View {
             Item(id: "c.sheet.new", title: "New Diagram of This Model", detail: "empty", symbol: "rectangle.stack.badge.plus") { store.newSheet(.empty) },
             Item(id: "c.sheet.all", title: "New Diagram With Every Entity", detail: "", symbol: "rectangle.stack.badge.plus") { store.newSheet(.everything) },
             Item(id: "c.sheet.copy", title: "Duplicate This Diagram", detail: "", symbol: "rectangle.stack.badge.plus") { store.newSheet(.copy) },
+            Item(id: "c.activity", title: "New Activity Diagram", detail: "", symbol: "arrow.triangle.branch") { store.newActivity() },
             Item(id: "c.note", title: "New Note", detail: "", symbol: "note.text") { store.newNote(.note) },
             Item(id: "c.text", title: "New Text", detail: "", symbol: "textformat") { store.newNote(.text) },
             Item(id: "c.picture", title: "Add a Picture…", detail: "", symbol: "photo") { store.chooseImage() },
@@ -571,7 +611,7 @@ struct PaletteView: View {
                 store.edit("Change Lines") { $0.display.lineJumps.toggle() }
             },
             Item(id: "c.map", title: "Show or Hide the Map", detail: "⌥⌘M", symbol: "map") { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "showMap"), forKey: "showMap") },
-            Item(id: "c.fit", title: "Zoom to Fit", detail: "⌘1", symbol: "arrow.up.left.and.arrow.down.right") { store.canvas?.zoomToFit() },
+            Item(id: "c.fit", title: "Zoom to Fit", detail: "⌘1", symbol: "arrow.up.left.and.arrow.down.right") { store.zoomToFit() },
             Item(id: "c.sql", title: store.showSQL ? "Hide SQL" : "Show SQL", detail: "⌥⌘S", symbol: "chevron.left.forwardslash.chevron.right") { store.showSQL.toggle() },
             Item(id: "c.import", title: "Import SQL…", detail: "⇧⌘I", symbol: "square.and.arrow.down") { store.sheet = .importSQL },
             Item(id: "c.sheet", title: "Import Spreadsheet…", detail: "xlsx, csv", symbol: "tablecells") { store.chooseSheet() },

@@ -50,6 +50,17 @@ enum DocumentExport {
             }
             out += "</table>\n"
         }
+        // The activity diagrams, each as a picture with what its steps mean under it.
+        for activity in d.activities where !activity.nodes.isEmpty {
+            out += "<h2>\(e(activity.name))</h2>\n"
+            if scene != nil { out += "<div class=\"picture\">\n" + ActivityScene(activity).svg(dark: false, transparent: false) + "</div>\n" }
+            let explained = activity.nodes.filter { !$0.definition.isEmpty }
+            if !explained.isEmpty {
+                out += "<table><tr><th>Step</th><th>What it means</th></tr>\n"
+                for node in explained { out += "<tr><td>\(e(node.name))</td><td>\(e(node.definition))</td></tr>\n" }
+                out += "</table>\n"
+            }
+        }
         return out + "</body></html>\n"
     }
 }

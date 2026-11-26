@@ -186,7 +186,7 @@ java.util.ArrayList 8683452581122892189 3 -
 ~jomt.jmodel.JomtPresentation -7508818022374904276 2 ~uml.Foundation.Core.UPresentation
  Z constraintVisibility - p:true
  I depth - !p:-1
- I notationType - p:0
+ I notationType - !p:0
  L changeId Ljava/lang/Long; long
  L compositeParent L~/uml/Foundation/Core/IUPresentation; !
  L container L~/jomt/jmodel/IRectPresentation; null
@@ -226,9 +226,9 @@ java.util.ArrayList 8683452581122892189 3 -
 ~jomt.jmodel.BinaryRelationPresentation -280041293397631763 2 ~jomt.jmodel.PathPresentation
  Z rightAngle - p:false
  D sourceEndX - !p:0.5
- D sourceEndY - p:0.5
+ D sourceEndY - !p:0.5
  D targetEndX - !p:0.5
- D targetEndY - p:0.5
+ D targetEndY - !p:0.5
  Z visibility - p:true
 ~jomt.jmodel.PathPresentation -3921316546713049945 2 ~jomt.jmodel.JomtPresentation
  [ allPoints [L~/golf/geom2D/Pnt2d; !
@@ -245,7 +245,7 @@ java.util.ArrayList 8683452581122892189 3 -
  L notation Ljava/lang/String; !
 ~uml.Foundation.Core.UDiagramImp 2440481016904270269 2 ~uml.Foundation.Core.UModelElementImp
  L styleMap Ljava/util/Map; null
- L type Ljava/lang/String; s:"ER Diagram"
+ L type Ljava/lang/String; !
 ~er.ERRelationshipImp -1601608082830970740 2 ~uml.Foundation.Core.UAssociationImp
  Z isIdentifying - !p:false
  L erIndex L~/er/ERIndex; !
@@ -337,5 +337,147 @@ java.awt.Color 118526816881161077 2 -
  L cs Ljava/awt/color/ColorSpace; null
  [ frgbvalue [F null
  [ fvalue [F null
+~jomt.jmodel.FramePresentation 3333927766571945314 2 ~jomt.jmodel.LabelPresentation
+~uml.BehavioralElements.ActivityGraphs.UActivityDiagramImp -1180966599453412129 2 ~uml.BehavioralElements.StateMachines.UStateChartDiagramImp
+ I horizontalMaxLevel - p:-1
+ I verticalMaxLevel - !p:-1
+~uml.BehavioralElements.StateMachines.UStateChartDiagramImp -2098902235614466883 2 ~uml.Foundation.Core.UDiagramImp
+ L stateMachine L~/uml/BehavioralElements/StateMachines/UStateMachine; !
+~jomt.jmodel.SwimlanePresentation 6563353271834085937 2 ~jomt.jmodel.LabelPresentation
+ Z isHorizontal - p:false
+ D nameBlockHeight - p:34.1328125
+ L leftLane L~/jomt/jmodel/ISwimlanePresentation; !
+ L rightLane L~/jomt/jmodel/ISwimlanePresentation; !
+~uml.BehavioralElements.ActivityGraphs.UPartitionImp 6056679042194861678 2 ~uml.Foundation.Core.UModelElementImp
+ Z isDimension - p:false
+ Z isExternal - p:false
+ L activityGraph L~/uml/BehavioralElements/ActivityGraphs/UActivityGraph; !
+ L contents Ljava/util/List; list
+ L represents L~/uml/Foundation/Core/UModelElement; null
+ L subGroup Ljava/util/List; list
+ L superPartition L~/uml/BehavioralElements/ActivityGraphs/UPartition; !
+~uml.BehavioralElements.ActivityGraphs.UActivityGraphImp 7207632020705004959 2 ~uml.BehavioralElements.StateMachines.UStateMachineImp
+ L partition Ljava/util/List; list
+~uml.BehavioralElements.StateMachines.UStateMachineImp 9137036643939225196 2 ~uml.Foundation.Core.UModelElementImp
+ L context L~/uml/Foundation/Core/UModelElement; !
+ L diagram L~/uml/Foundation/Core/UDiagram; !
+ L submachineInv Ljava/util/List; list
+ L top L~/uml/BehavioralElements/StateMachines/UState; !
+ L transition Ljava/util/List; list
+~uml.BehavioralElements.StateMachines.UCompositeStateImp -4959795914272464929 2 ~uml.BehavioralElements.StateMachines.UStateImp
+ Z concurrent - p:true
+ Z isOrthogonal - p:false
+ Z region - p:true
+ L subvertex Ljava/util/List; list
+~uml.BehavioralElements.StateMachines.UStateImp -7194961838608411907 2 ~uml.BehavioralElements.StateMachines.UStateVertexImp
+ L deferrableEvent Ljava/util/List; list
+ L doActivity L~/uml/BehavioralElements/CommonBehavior/UAction; null
+ L entry L~/uml/BehavioralElements/CommonBehavior/UAction; !
+ L exit L~/uml/BehavioralElements/CommonBehavior/UAction; null
+ L inStateInv Ljava/util/List; list
+ L internalTransitions Ljava/util/List; list
+~uml.BehavioralElements.StateMachines.UStateVertexImp 959703571848299635 2 ~uml.Foundation.Core.UModelElementImp
+ L container L~/uml/BehavioralElements/StateMachines/UCompositeState; !
+ L incoming Ljava/util/List; list
+ L outgoing Ljava/util/List; list
+~uml.BehavioralElements.StateMachines.UPseudostateImp 2786582475081817945 2 ~uml.BehavioralElements.StateMachines.UStateVertexImp
+ L kind L~/uml/Foundation/DataTypes/UPseudostateKind; !
+~jomt.jmodel.InitialStatePresentation 4690364638652627410 2 ~jomt.jmodel.PseudoStatePresentation
+~jomt.jmodel.PseudoStatePresentation -2976999150964488323 2 ~jomt.jmodel.StateVertexPresentation
+~jomt.jmodel.StateVertexPresentation 4721914834621860821 2 ~jomt.jmodel.LabelPresentation
+~jomt.jmodel.TransitionPresentation 282392447573938866 2 ~jomt.jmodel.BinaryRelationPresentation
+ L weightPresentation L~/jomt/jmodel/ILabelPresentation; null
+~uml.BehavioralElements.StateMachines.UTransitionImp 6314222865271285450 2 ~uml.Foundation.Core.UModelElementImp
+ L effect L~/uml/BehavioralElements/CommonBehavior/UAction; !
+ L guard L~/uml/BehavioralElements/StateMachines/UGuard; !
+ L internalTransitionInv L~/uml/BehavioralElements/StateMachines/UState; null
+ L source L~/uml/BehavioralElements/StateMachines/UStateVertex; !
+ L target L~/uml/BehavioralElements/StateMachines/UStateVertex; !
+ L transitionsInv L~/uml/BehavioralElements/StateMachines/UStateMachine; !
+ L trigger L~/uml/BehavioralElements/StateMachines/UEvent; null
+~uml.BehavioralElements.ActivityGraphs.UActionStateImp 75641589304447495 2 ~uml.BehavioralElements.StateMachines.USimpleStateImp
+ Z isDynamic - p:false
+ L dynamicArguments L~/uml/Foundation/DataTypes/UArgListsExpression; null
+ L dynamicMultiplicity L~/uml/Foundation/DataTypes/UMultiplicity; null
+~uml.BehavioralElements.StateMachines.USimpleStateImp 5320629442179182924 2 ~uml.BehavioralElements.StateMachines.UStateImp
+~jomt.jmodel.ActionStatePresentation -4929915538544448222 2 ~jomt.jmodel.SimpleStatePresentation
+ Z signalReverse - p:false
+~jomt.jmodel.SimpleStatePresentation -1104792225784671574 2 ~jomt.jmodel.StatePresentation
+~jomt.jmodel.StatePresentation 963871240682417937 2 ~jomt.jmodel.StateVertexPresentation
+ Z allActionVisibility - p:true
+~jomt.jmodel.MergePresentation -577175615705292933 2 ~jomt.jmodel.PseudoStatePresentation
+~uml.BehavioralElements.StateMachines.UGuardImp -970871892479305563 2 ~uml.Foundation.Core.UModelElementImp
+ L expression L~/uml/Foundation/DataTypes/UBooleanExpression; null
+~jomt.jmodel.ForkPresentation 3551279065299698592 2 ~jomt.jmodel.PseudoStatePresentation
+ Z isSwimlaneIndepent - p:false
+~jomt.jmodel.JoinPresentation 9214645497537807273 2 ~jomt.jmodel.PseudoStatePresentation
+ Z isSwimlaneIndepent - p:false
+~uml.BehavioralElements.CommonBehavior.UActionImp -2047213736958731553 2 ~uml.Foundation.Core.UModelElementImp
+ I actionType - p:5
+ Z asynchronous - p:false
+ L actionInv L~/uml/BehavioralElements/CommonBehavior/UActionSequence; null
+ L actualArgument Ljava/util/List; list
+ L doActivityInv L~/uml/BehavioralElements/StateMachines/UState; null
+ L effectInv L~/uml/BehavioralElements/StateMachines/UTransition; !
+ L entryInv L~/uml/BehavioralElements/StateMachines/UState; !
+ L exitInv L~/uml/BehavioralElements/StateMachines/UState; null
+ L instantiation L~/uml/Foundation/Core/UClassifier; null
+ L message L~/uml/BehavioralElements/Collaborations/UMessage; null
+ L operation L~/uml/Foundation/Core/UOperation; null
+ L recurrence L~/uml/Foundation/DataTypes/UIterationExpression; null
+ L script L~/uml/Foundation/DataTypes/UActionExpression; null
+ L signal L~/uml/BehavioralElements/CommonBehavior/USignal; null
+ L target L~/uml/Foundation/DataTypes/UObjectSetExpression; null
+~uml.BehavioralElements.StateMachines.UFinalStateImp -3479067430018879617 2 ~uml.BehavioralElements.StateMachines.UStateImp
+~jomt.jmodel.FinalStatePresentation 7568051249719237742 2 ~jomt.jmodel.StatePresentation
+~uml.Foundation.DataTypes.UPseudostateKind -259514805478361755 2 -
+ L label Ljava/lang/String; !
+~uml.java.JUStereotypeImp 4173060910466613632 2 ~uml.Foundation.ExtensionMechanisms.UStereotypeImp
+ I iconType - p:0
+~uml.Foundation.ExtensionMechanisms.UStereotypeImp 659245048182461367 2 ~uml.Foundation.Core.UGeneralizableElementImp
+ L extendedElement Ljava/util/List; list
+ L icon L~/uml/Foundation/DataTypes/UGeometry; !
+ L requiredTag Ljava/util/List; list
+ L stereotypeConstraint Ljava/util/List; list
+~uml.Foundation.Core.UGeneralizableElementImp -8478109097398358714 2 ~uml.Foundation.Core.UModelElementImp
+ Z abst - p:false
+ Z leaf - p:false
+ Z root - p:false
+ L generalization Ljava/util/List; list
+ L specialization Ljava/util/List; list
+~uml.Foundation.DataTypes.UGeometry 4855035599242093751 2 -
+ L label Ljava/lang/String; s:"none"
+~uml.BehavioralElements.ActivityGraphs.UObjectFlowStateImp 8460613896272571989 2 ~uml.BehavioralElements.StateMachines.USimpleStateImp
+ Z synch - p:true
+ L parameters Ljava/util/List; list
+ L type L~/uml/Foundation/Core/UClassifier; !
+ L typeInv L~/uml/Foundation/Core/UClassifier; null
+~jomt.jmodel.ObjectFlowStatePresentation 5707782330950595165 2 ~jomt.jmodel.SimpleStatePresentation
+ D MIN_HEIGHT - p:17.0
+ D MIN_WIDTH - p:40.0
+ Z baseStereotypeVisibility - p:true
+ Z baseVisibility - p:true
+ Z nameVisibility - p:true
+ L exceptionPresentation L~/jomt/jmodel/IRectPresentation; !
+ L propertyPresentations Ljava/util/Map; !
+java.util.LinkedHashMap 3801124242820219131 2 java.util.HashMap
+ Z accessOrder - p:false
+~uml.BehavioralElements.ActivityGraphs.UClassifierInStateImp -3836087234964675275 2 ~uml.Foundation.Core.UClassifierImp
+ L inStates Ljava/util/List; list
+ L inStatesInv Ljava/util/List; list
+ L type L~/uml/Foundation/Core/UClassifier; null
+ L typeInv L~/uml/Foundation/Core/UClassifier; null
+~uml.BehavioralElements.ActivityGraphs.USubactivityStateImp 75641589304447495 2 ~uml.BehavioralElements.StateMachines.USubmachineStateImp
+ Z isDynamic - p:false
+ L dynamicArguments L~/uml/Foundation/DataTypes/UArgListsExpression; null
+ L dynamicMultiplicity L~/uml/Foundation/DataTypes/UMultiplicity; null
+~uml.BehavioralElements.StateMachines.USubmachineStateImp 8473792130490978725 2 ~uml.BehavioralElements.StateMachines.UCompositeStateImp
+ L submachine L~/uml/BehavioralElements/StateMachines/UStateMachine; null
+~jomt.jmodel.SubactivityStatePresentation -9164264425634782436 2 ~jomt.jmodel.SubmachineStatePresentation
+~jomt.jmodel.SubmachineStatePresentation 9011298764144327369 2 ~jomt.jmodel.CompositeStatePresentation
+~jomt.jmodel.CompositeStatePresentation -2807843092999751621 2 ~jomt.jmodel.StatePresentation
+ [ horizontalRegionOffsets [D !
+ [ verticalRegionOffsets [D !
+[D 4514449696888150558 2 -
 """#
 }
