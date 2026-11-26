@@ -10,6 +10,7 @@
 
 - [ ] `./build.sh check` passes (unit tests and the editing self-test)
 - [ ] If it touches the importer: tried on a real dump, and the rows are still skipped (`Schema --inspect=<file.sql>`)
+- [ ] If it touches the Astah export: `Resources/astah/check.sh` passes against Astah Professional
 - [ ] If it touches the file format: files saved by the released version still open
 - [ ] If people will notice the change: a line under the next version in `CHANGELOG.md`
 - [ ] No version bump in `Info.plist` (the maintainer does that when releasing)

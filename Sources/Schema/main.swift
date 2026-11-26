@@ -11,7 +11,7 @@ import SwiftUI
 //   --notation=ie|idef1x  --names=logical|physical  --detail=all|keys|namesOnly  --dialect=<name>
 //   --no-inspector  --no-sidebar  --empty
 //   --snapshot=<file.png> [--size=1360x860]   draws the window into a PNG without showing it, then quits
-//   --export=<file.png|pdf|sql|md> [--dark]   writes the sample (or --open=<file>, or --from-sql=<file.sql>) and quits;
+//   --export=<file.png|pdf|sql|md|csv|asta|mschema> [--dark]   writes the sample (or --open=<file>, or --from-sql=<file.sql>) and quits;
 //                               with --dialect=mysql and --from-sql it rewrites a dump's tables for another database
 //   --import-sheet=<file.sql>   opens the import sheet on a file (with --snapshot: a picture of the sheet)
 //   --import-file=<file.sql>    reads a SQL file the way dropping it on the canvas does
@@ -163,6 +163,7 @@ enum MainMenu {
             item("Export SQL…", #selector(W.exportSQL(_:)), "e", [.command, .shift]),
             item("Export Image…", #selector(W.exportImage(_:)), "e", [.command, .option]),
             item("Export Data Dictionary…", #selector(W.exportDictionary(_:)), ""),
+            item("Export for Astah…", #selector(W.exportAstah(_:)), ""),
         ])
         menu("Edit", [
             item("Undo", Selector(("undo:")), "z"),
@@ -253,6 +254,10 @@ enum Headless {
             do { diagram = try SQLImport.parse(contentsOf: URL(fileURLWithPath: path)).diagram } catch { fail("Couldn't read \(path): \(error.localizedDescription)") }
         }
         if let v = Flags.value("dialect").flatMap(Dialect.init(rawValue:)) { diagram.dialect = v }
+        // How it is drawn counts for an export too: a picture, or a file that keeps the notation.
+        if let v = Flags.value("notation").flatMap(Notation.init(rawValue:)) { diagram.display.notation = v }
+        if let v = Flags.value("names").flatMap(NameDisplay.init(rawValue:)) { diagram.display.names = v }
+        if let v = Flags.value("detail").flatMap(DetailLevel.init(rawValue:)) { diagram.display.level = v }
         if let path = Flags.value("inspect") { inspect(path) }
         if let path = Flags.value("export") { export(diagram, to: path) }
         guard let doc = (NSDocumentController.shared as? SchemaDocumentController)?.openUntitled(with: diagram, display: false),
@@ -350,6 +355,9 @@ enum Headless {
             case "sql": try SQLExport.script(for: diagram).write(to: url, atomically: true, encoding: .utf8)
             case "md": try Report.markdown(for: diagram, title: "Diagram").write(to: url, atomically: true, encoding: .utf8)
             case "csv": try Report.csv(for: diagram).write(to: url, atomically: true, encoding: .utf8)
+            case AstaExport.fileExtension: try AstaExport.data(for: diagram, layout: scene.astaLayout).write(to: url)
+            // What Astah should show after opening that file (see Resources/astah).
+            case "astalist": try AstaExport.manifest(for: diagram).write(to: url, atomically: true, encoding: .utf8)
             case schemaExtension: try diagram.encoded().write(to: url)
             default: fail("Unknown file type: \(url.pathExtension)")
             }
