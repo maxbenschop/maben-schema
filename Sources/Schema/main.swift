@@ -28,7 +28,7 @@ enum Flags {
     }
     static func has(_ name: String) -> Bool { CommandLine.arguments.contains("--\(name)") }
     static var bench: Bool { has("bench") || value("bench") != nil }
-    static var headless: Bool { value("snapshot") != nil || value("export") != nil || value("print") != nil || value("inspect") != nil || has("selftest") || bench }
+    static var headless: Bool { value("snapshot") != nil || value("export") != nil || value("print") != nil || value("compare") != nil || value("script") != nil || value("inspect") != nil || has("selftest") || bench }
 }
 
 @MainActor
@@ -162,6 +162,7 @@ enum MainMenu {
             .separator(),
             item("Import SQL…", #selector(W.importSQL(_:)), "i", [.command, .shift]),
             item("Import Spreadsheet…", #selector(W.importSpreadsheet(_:)), ""),
+            item("Compare With…", #selector(W.compareWith(_:)), ""),
             item("Export SQL…", #selector(W.exportSQL(_:)), "e", [.command, .shift]),
             item("Export Image…", #selector(W.exportImage(_:)), "e", [.command, .option]),
             item("Export Data Dictionary…", #selector(W.exportDictionary(_:)), ""),
@@ -194,6 +195,18 @@ enum MainMenu {
             item("Add Attribute", #selector(W.addAttribute(_:)), "\r", [.command]),
             item("Rename", #selector(W.renameSelection(_:)), "r", [.command]),
             item("New Domain", #selector(W.newDomain(_:)), ""),
+            submenu("New Diagram of This Model", [
+                item("Empty", #selector(W.newSheet(_:)), "", tag: 0),
+                item("With Every Entity", #selector(W.newSheet(_:)), "", tag: 1),
+                item("With the Selected Entities", #selector(W.newSheet(_:)), "", tag: 2),
+                item("A Copy of This One", #selector(W.newSheet(_:)), "", tag: 3),
+            ]),
+            item("Rename This Diagram…", #selector(W.renameSheet(_:)), ""),
+            item("Delete This Diagram", #selector(W.deleteSheet(_:)), ""),
+            item("Next Diagram", #selector(W.nextSheet(_:)), "}", [.command]),
+            item("Previous Diagram", #selector(W.previousSheet(_:)), "{", [.command]),
+            item("Take Off This Diagram", #selector(W.takeOffDiagram(_:)), ""),
+            .separator(),
             submenu("Add", [
                 item("Note", #selector(W.addAnnotation(_:)), "", represented: Tool.note.rawValue),
                 item("Text", #selector(W.addAnnotation(_:)), "", represented: Tool.text.rawValue),
@@ -226,6 +239,7 @@ enum MainMenu {
             ]),
             item("Bring to Front", #selector(W.bringToFront(_:)), "]", [.command, .shift]),
             item("Send to Back", #selector(W.sendToBack(_:)), "[", [.command, .shift]),
+            item("Run Script…", #selector(W.runScript(_:)), "r", [.command, .option]),
             submenu("Lines", [
                 item("Hop Over Each Other Where They Cross", #selector(W.toggleLineJumps(_:)), ""),
                 item("Find Every Line’s Way Again", #selector(W.rerouteAll(_:)), ""),
@@ -312,6 +326,27 @@ enum Headless {
         if let v = Flags.value("notation").flatMap(Notation.init(rawValue:)) { diagram.display.notation = v }
         if let v = Flags.value("names").flatMap(NameDisplay.init(rawValue:)) { diagram.display.names = v }
         if let v = Flags.value("detail").flatMap(DetailLevel.init(rawValue:)) { diagram.display.level = v }
+        // --script=<file.js>: runs a script on the diagram before anything else is done with it, and prints what it logged.
+        if let path = Flags.value("script") {
+            guard let source = try? String(contentsOfFile: path, encoding: .utf8) else { fail("Couldn't read \(path)") }
+            let outcome = Script.run(source, on: diagram)
+            outcome.log.forEach { print($0) }
+            if let error = outcome.error { fail(error) }
+            if let changed = outcome.diagram { diagram = changed }
+            if Flags.value("export") == nil, Flags.value("snapshot") == nil, Flags.value("print") == nil, Flags.value("compare") == nil { exit(0) }
+        }
+        // --compare=<file>: prints how the diagram differs from another (a .mschema, .sql, .xlsx or .csv), and quits.
+        if let path = Flags.value("compare") {
+            do {
+                let url = URL(fileURLWithPath: path)
+                let other = url.pathExtension == schemaExtension ? try Diagram.decode(Data(contentsOf: url))
+                    : ["xlsx", "csv"].contains(url.pathExtension.lowercased()) ? try SheetImport.parse(contentsOf: url).diagram : try SQLImport.parse(contentsOf: url).diagram
+                let diff = DiagramDiff.compare(other, diagram)
+                for c in diff.changes { print("\(c.kind == .added ? "+" : c.kind == .removed ? "-" : "~") \(c.subject)\(c.details.isEmpty ? "" : ": " + c.details.joined(separator: "; "))") }
+                print("\(diff.count(.added)) only here, \(diff.count(.removed)) only in \(url.lastPathComponent), \(diff.count(.changed)) different")
+                exit(0)
+            } catch { fail("Couldn't read \(path): \(error.localizedDescription)") }
+        }
         if let path = Flags.value("inspect") { inspect(path) }
         if let path = Flags.value("print") { printed(diagram, to: path) }
         if let path = Flags.value("export") { export(diagram, to: path) }
@@ -432,7 +467,7 @@ enum Headless {
             case "md": try Report.markdown(for: diagram, title: "Diagram").write(to: url, atomically: true, encoding: .utf8)
             case "csv": try Report.csv(for: diagram).write(to: url, atomically: true, encoding: .utf8)
             case "xlsx": try Report.workbook(for: diagram).xlsx().write(to: url)
-            case AstaExport.fileExtension: try AstaExport.data(for: diagram, layout: scene.astaLayout).write(to: url)
+            case AstaExport.fileExtension: try AstaExport.data(for: diagram, layout: scene.astaLayout, others: Scene.astaOthers(of: diagram)).write(to: url)
             // What Astah should show after opening that file (see Resources/astah).
             case "astalist": try AstaExport.manifest(for: diagram).write(to: url, atomically: true, encoding: .utf8)
             case schemaExtension: try diagram.encoded().write(to: url)

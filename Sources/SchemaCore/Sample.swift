@@ -135,6 +135,16 @@ public enum Sample {
         d.annotations = [group, note, title, arrow]
         d.display.lineJumps = true
         d.normalize()
+        // A second diagram of the same model, with only the people on it, drawn another way.
+        let first = d.sheetID
+        d.sheetName = "Everything"
+        d.addSheet(named: "People", with: [person, employee, contractor])
+        d.display.notation = .idef1x
+        d.update(entity: person) { $0.position = Point(260, 60) }
+        d.update(entity: employee) { $0.position = Point(80, 320) }
+        d.update(entity: contractor) { $0.position = Point(440, 320) }
+        d.annotations = [Annotation(kind: .text, x: 80, y: 20, width: 200, height: 24, text: "Only the people")]
+        d.activate(first)
         return d
     }
 }

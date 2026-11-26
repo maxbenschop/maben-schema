@@ -58,8 +58,13 @@ public enum AstaExport {
 
     public static let fileExtension = "asta"
 
-    public static func data(for diagram: Diagram, layout: Layout = Layout(), options: Options = Options()) -> Data {
-        let builder = AstaBuilder(diagram, layout, options)
+    /// The same model with another of its diagrams showing, and where things are on that one.
+    public typealias Other = (diagram: Diagram, layout: Layout)
+
+    /// `others`: the file's other diagrams (see `Diagram.showing`), each with its own layout. Astah gets a diagram
+    /// for each, all of the one model.
+    public static func data(for diagram: Diagram, layout: Layout = Layout(), options: Options = Options(), others: [Other] = []) -> Data {
+        let builder = AstaBuilder(diagram, layout, options, others: others)
         return Zip.archive([Zip.Entry(name: "EntityStore", data: builder.stream())], date: options.date)
     }
 
@@ -113,12 +118,19 @@ public enum AstaExport {
         }
         // What is on the canvas beside the model: notes, the ones that are about something, text (a shape's label is
         // text too), and rectangles and straight lines.
+        for view in [d] + d.sheets.map({ d.showing($0.id) }) { out.append(diagramLine(view)) }
+        return out.joined(separator: "\n") + "\n"
+    }
+
+    static func diagramLine(_ d: Diagram) -> String {
+        let off = Set(d.hidden)
+        let boxes = d.entities.filter { !off.contains($0.id) }.count
+        let lines = d.relationships.filter { !off.contains($0.parent) && !off.contains($0.child) }.count
         let notes = d.annotations.filter { $0.kind == .note }
         let texts = d.annotations.filter { $0.kind == .text || ($0.kind == .rectangle && !$0.text.isEmpty) }.count
         let shapes = d.annotations.filter { $0.kind == .rectangle || (($0.kind == .line || $0.kind == .arrow) && $0.points.count >= 2) }.count
-        out.append("DIAGRAM \(d.display.notation == .ie ? "IE" : "IDEF1X")|\(d.display.names == .physical ? "Physical Model" : "Logical Model")|boxes=\(d.entities.count)|lines=\(d.relationships.count)"
-                   + "|notes=\(notes.count)|about=\(notes.filter { $0.entity != nil }.count)|texts=\(texts)|shapes=\(shapes)")
-        return out.joined(separator: "\n") + "\n"
+        return "DIAGRAM \(d.display.notation == .ie ? "IE" : "IDEF1X")|\(d.display.names == .physical ? "Physical Model" : "Logical Model")|boxes=\(boxes)|lines=\(lines)"
+            + "|notes=\(notes.count)|about=\(notes.filter { $0.entity != nil && !off.contains($0.entity!) }.count)|texts=\(texts)|shapes=\(shapes)"
     }
 
     /// A count of your own as Astah writes it: `3`, `2..5`.
@@ -181,6 +193,7 @@ public enum AstaExport {
 final class AstaBuilder {
     private let diagram: Diagram
     private let layout: AstaExport.Layout
+    private let others: [AstaExport.Other]
     private let options: AstaExport.Options
 
     private static let classes: [String: JClass] = AstaBuilder.parseClasses()
@@ -207,9 +220,10 @@ final class AstaBuilder {
     ]
     private static let observable = "JP.co.esm.caddies.uml.util.ExObservable"
 
-    init(_ diagram: Diagram, _ layout: AstaExport.Layout, _ options: AstaExport.Options) {
+    init(_ diagram: Diagram, _ layout: AstaExport.Layout, _ options: AstaExport.Options, others: [AstaExport.Other] = []) {
         self.diagram = diagram
         self.layout = layout
+        self.others = others
         self.options = options
         let given = options.identifier.lowercased().filter(\.isHexDigit)
         suffix = given.count == 32 ? given : UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
@@ -692,7 +706,11 @@ final class AstaBuilder {
             relationshipObjects[r.id] = relationship
         }
 
-        draw(in: schema, entityObjects, relationshipObjects, attributeObjects)
+        // A diagram in Astah for each diagram here, the one being shown first.
+        draw(diagram, layout, named: diagram.hasSeveralSheets ? diagram.sheetName : options.diagramName, in: schema, entityObjects, relationshipObjects, attributeObjects)
+        for other in others {
+            draw(other.diagram, other.layout, named: other.diagram.sheetName, in: schema, entityObjects, relationshipObjects, attributeObjects)
+        }
 
         let info = make("ModelManageInfo")
         info["lastModifiedTime"] = .long(Int64(options.date.timeIntervalSince1970 * 1000))
@@ -726,12 +744,12 @@ final class AstaBuilder {
     /// How big Astah will draw an entity. It sizes its boxes itself when it opens a file, around the middle of
     /// the box in the file; with its own size already there, nothing shifts.
     private func astahSize(_ e: Entity) -> (width: Double, height: Double) {
-        let display = diagram.display
+        let display = view.display
         let shown = display.level == .all ? e.attributes : display.level == .keys ? e.attributes.filter(\.isPrimaryKey) : []
         var name = 0, type = 0, marks = 0
         for a in shown {
-            name = max(name, diagram.attributeName(a).count)
-            let (base, length) = AstaExport.split(diagram.resolvedType(a.type))
+            name = max(name, view.attributeName(a).count)
+            let (base, length) = AstaExport.split(view.resolvedType(a.type))
             type = max(type, base.count + (length.isEmpty ? 0 : length.count + 3))
             marks = max(marks, (a.isForeignKey ? 5 : 0) + (a.unique ? 6 : 0))
         }
@@ -739,15 +757,24 @@ final class AstaBuilder {
         if display.showTypes, !shown.isEmpty { characters += Double(type) + 1.9 }
         if display.showConstraints, !shown.isEmpty { characters += 9 }
         characters += Double(marks)
-        let title = Double(diagram.entityName(e).count) * 7.4
+        let title = Double(view.entityName(e).count) * 7.4
         let width = max(80, 20 + characters * Self.characterWidth, title)
         let height = display.level == .namesOnly ? Self.nameHeight + 30 : Self.nameHeight + 16.1328125 + Double(max(shown.count, 1)) * Self.lineHeight
         return (width, height)
     }
 
-    private func draw(in schema: JObject, _ entities: [UUID: JObject], _ relationships: [UUID: JObject], _ attributes: [UUID: JObject]) {
-        let display = diagram.display
-        let sheet = named("UERDiagramImp", options.diagramName)
+    /// The diagram being drawn: `diagram` itself, or the same model with another of its diagrams showing.
+    private var view = Diagram()
+    private var viewLayout = AstaExport.Layout()
+
+    private func draw(_ view: Diagram, _ layout: AstaExport.Layout, named name: String, in schema: JObject,
+                      _ entities: [UUID: JObject], _ relationships: [UUID: JObject], _ attributes: [UUID: JObject]) {
+        self.view = view
+        viewLayout = layout
+        bodies = [:]
+        let off = Set(view.hidden)
+        let display = view.display
+        let sheet = named("UERDiagramImp", name)
         own(schema, sheet)
         sheet["notation"] = .string(display.notation == .ie ? "IE" : "IDEF1X")
         sheet["modelType"] = .string(display.names == .physical ? "Physical Model" : "Logical Model")
@@ -759,7 +786,7 @@ final class AstaBuilder {
         // stay at least as wide as they were.
         var sizes: [UUID: (width: Double, height: Double)] = [:]
         stretch = 1
-        for e in diagram.entities {
+        for e in view.entities where !off.contains(e.id) {
             guard let drawn = frame(of: e.id) else { continue }
             let size = astahSize(e)
             sizes[e.id] = size
@@ -770,7 +797,7 @@ final class AstaBuilder {
         // Astah draws what was made later on top: the shapes that lie under the entities go first.
         var depth: Int32 = 0
         var boxes: [UUID: JObject] = [:]
-        for a in diagram.annotations where a.kind == .rectangle {
+        for a in view.annotations where a.kind == .rectangle {
             depth -= 1
             let shape = make("RectPresentation")
             place(shape, on: sheet, depth: depth, Rect(a.x * stretch, a.y, a.width * stretch, a.height))
@@ -779,8 +806,8 @@ final class AstaBuilder {
             if !a.style.line.isEmpty { look.append(("line.color", a.style.line.uppercased())) }
             shape["styleMap"] = map(look)
         }
-        let dependent = diagram.dependentEntities
-        for e in diagram.entities {
+        let dependent = view.dependentEntities
+        for e in view.entities where !off.contains(e.id) {
             guard let model = entities[e.id], let drawn = frame(of: e.id), let size = sizes[e.id] else { continue }
             // The same middle as it had here.
             let frame = Rect(drawn.midX * stretch - size.width / 2, drawn.midY - size.height / 2, size.width, size.height)
@@ -791,7 +818,7 @@ final class AstaBuilder {
             box["model"] = .object(model)
             // Its own colour first, then its colour tag, then the colour of its kind.
             let own = e.style.fill.isEmpty ? AstaExport.fill(e.color) : e.style.fill.uppercased()
-            var style = [("fill.color.alpha", "FF"), ("fill.color", own ?? diagram.typeColor(of: e)?.uppercased() ?? "#FFFFCC")]
+            var style = [("fill.color.alpha", "FF"), ("fill.color", own ?? view.typeColor(of: e)?.uppercased() ?? "#FFFFCC")]
             if own != nil { style.append(("isfilled.color", "true")) }
             if !e.style.line.isEmpty { style.append(("line.color", e.style.line.uppercased())) }
             if !e.style.text.isEmpty { style.append(("font.color", e.style.text.uppercased())) }
@@ -812,7 +839,7 @@ final class AstaBuilder {
             boxes[e.id] = box
         }
 
-        for r in diagram.relationships {
+        for r in view.relationships {
             guard let model = relationships[r.id], let from = boxes[r.parent], let to = boxes[r.child] else { continue }
             let line = make(r.kind == .subtype ? "ERSubtypeRelationshipPresentation" : "ERRelationshipPresentation")
             depth -= 1
@@ -863,7 +890,7 @@ final class AstaBuilder {
 
         // What lies on top: notes (with the line to what they are about), text and straight lines. Astah has
         // no place for a drawing by hand, an oval or a picture from here, so those stay behind.
-        for a in diagram.annotations {
+        for a in view.annotations {
             let frame = Rect((a.x + a.width / 2) * stretch - a.width / 2, a.y, a.width, a.height)
             switch a.kind {
             case .note:
@@ -946,7 +973,7 @@ final class AstaBuilder {
         }
     }
 
-    /// Puts a box-shaped thing (a note, text, a rectangle) on the diagram.
+    /// Puts a box-shaped thing (a note, text, a rectangle) on the view.
     private func place(_ o: JObject, on sheet: JObject, depth: Int32, _ frame: Rect) {
         o["diagram"] = .object(sheet)
         o["depth"] = .int(depth)
@@ -964,8 +991,8 @@ final class AstaBuilder {
 
     /// The box as it was drawn; without one, a guess from where the entity sits and how many lines it has.
     private func frame(of entity: UUID) -> Rect? {
-        if let f = layout.frames[entity] { return f }
-        guard let e = diagram.entity(entity) else { return nil }
+        if let f = viewLayout.frames[entity] { return f }
+        guard let e = view.entity(entity) else { return nil }
         return Rect(e.position.x, e.position.y, 180, 32 + Double(e.attributes.count) * 24 + 8)
     }
 
@@ -985,7 +1012,7 @@ final class AstaBuilder {
         guard let a = bodies[r.parent], let b = bodies[r.child] else {
             return Path(start: .zero, end: .zero, bends: [], leaves: .zero, enters: .zero, source: (0.5, 0.5), target: (0.5, 0.5))
         }
-        let drawn = layout.routes[r.id] ?? []
+        let drawn = viewLayout.routes[r.id] ?? []
         guard drawn.count >= 2, let first = drawn.first, let last = drawn.last, let fromFrame = frame(of: r.parent), let toFrame = frame(of: r.child) else {
             let start = Point(a.midX, a.midY), end = Point(b.midX, b.midY)
             return Path(start: start, end: end, bends: [], leaves: start, enters: end, source: (0.5, 0.5), target: (0.5, 0.5))

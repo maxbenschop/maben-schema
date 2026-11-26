@@ -144,6 +144,78 @@ struct ReplaceSheet: View {
     }
 }
 
+/// What differs between this diagram and another one, and a button to bring in what the other has more.
+struct CompareSheet: View {
+    @ObservedObject var store: DiagramStore
+    @State private var merged: Diagram.Merged?
+
+    private static func mark(_ kind: DiagramDiff.Kind) -> (String, Color) {
+        switch kind {
+        case .added: ("plus.circle.fill", MB.green)
+        case .removed: ("minus.circle.fill", MB.red)
+        case .changed: ("pencil.circle.fill", MB.orange)
+        }
+    }
+
+    private func summary(_ m: Diagram.Merged) -> String {
+        var parts: [String] = []
+        if m.entities > 0 { parts.append("\(m.entities) \(m.entities == 1 ? "entity" : "entities")") }
+        if m.attributes > 0 { parts.append("\(m.attributes) \(m.attributes == 1 ? "attribute" : "attributes")") }
+        if m.relationships > 0 { parts.append("\(m.relationships) \(m.relationships == 1 ? "relationship" : "relationships")") }
+        if m.domains > 0 { parts.append("\(m.domains) \(m.domains == 1 ? "domain" : "domains")") }
+        return parts.isEmpty ? "There was nothing to bring in." : "Brought in " + parts.joined(separator: ", ") + ". Undo takes it all back."
+    }
+
+    var body: some View {
+        let name = store.compared?.name ?? ""
+        // Read from the other diagram to this one: "added" is what this one has more.
+        let diff = store.compared.map { DiagramDiff.compare($0.diagram, store.diagram) } ?? DiagramDiff()
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("This diagram, next to \(name)").font(.system(size: 15, weight: .semibold)).foregroundStyle(MB.text).lineLimit(1)
+                Text(diff.changes.isEmpty ? "They hold the same tables, columns and relationships."
+                     : "\(diff.count(.added)) only here, \(diff.count(.removed)) only in \(name), \(diff.count(.changed)) different. Matched by table and column name.")
+                    .font(.system(size: 12)).foregroundStyle(MB.muted).fixedSize(horizontal: false, vertical: true)
+            }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(diff.changes) { change in
+                        let look = Self.mark(change.kind)
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: look.0).font(.system(size: 11)).foregroundStyle(look.1)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(change.subject).font(.system(size: 12.5)).foregroundStyle(MB.text)
+                                if !change.details.isEmpty {
+                                    Text(change.details.joined(separator: " · ")).font(.system(size: 11.5)).foregroundStyle(MB.dim).fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            Text(change.kind == .added ? "only here" : change.kind == .removed ? "only there" : "different").font(.system(size: 11)).foregroundStyle(MB.dim)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .frame(minHeight: 220)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(MB.wash(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(MB.line))
+            if let merged { Text(summary(merged)).font(.system(size: 12)).foregroundStyle(MB.muted) }
+            HStack(spacing: 8) {
+                Button("Bring In What Is Only There") { merged = store.mergeCompared() }
+                    .buttonStyle(.mbQuiet)
+                    .disabled(diff.count(.removed) == 0)
+                    .help("Adds the entities, attributes, relationships and domains the other diagram has and this one hasn’t. Nothing here is changed or removed.")
+                Spacer()
+                Button("Done") { store.sheet = nil }.buttonStyle(.mbPrimary).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(18)
+        .frame(width: 600, height: 460)
+        .background(MB.card)
+    }
+}
+
 /// The inspector for a note, a line of text, a shape, a drawing or a picture.
 struct AnnotationInspector: View {
     @ObservedObject var store: DiagramStore

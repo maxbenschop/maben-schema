@@ -18,10 +18,53 @@ enum Preferences {
         set { d.set(newValue.rawValue, forKey: "new.dialect") }
     }
 
-    /// A new, empty diagram with the choices from Settings.
+    /// Table and column names, not the names you read, on a new diagram.
+    static var physicalNames: Bool {
+        get { d.bool(forKey: "new.physical") }
+        set { d.set(newValue, forKey: "new.physical") }
+    }
+    static var level: DetailLevel {
+        get { DetailLevel(rawValue: d.string(forKey: "new.level") ?? "") ?? .all }
+        set { d.set(newValue.rawValue, forKey: "new.level") }
+    }
+    static var showTypes: Bool {
+        get { d.object(forKey: "new.types") as? Bool ?? true }
+        set { d.set(newValue, forKey: "new.types") }
+    }
+    static var showConstraints: Bool {
+        get { d.object(forKey: "new.constraints") as? Bool ?? true }
+        set { d.set(newValue, forKey: "new.constraints") }
+    }
+    static var lineJumps: Bool {
+        get { d.bool(forKey: "new.jumps") }
+        set { d.set(newValue, forKey: "new.jumps") }
+    }
+
+    /// A diagram of your own that new diagrams start as: its kinds, types, domains, SQL options, and whatever is
+    /// drawn on it. Kept in Application Support.
+    static var templateURL: URL {
+        let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Maben Schema", isDirectory: true)
+        return folder.appendingPathComponent("New Diagram." + schemaExtension)
+    }
+    static var hasTemplate: Bool { FileManager.default.fileExists(atPath: templateURL.path) }
+
+    static func saveTemplate(_ diagram: Diagram) throws {
+        try FileManager.default.createDirectory(at: templateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try diagram.encoded().write(to: templateURL)
+    }
+
+    static func removeTemplate() { try? FileManager.default.removeItem(at: templateURL) }
+
+    /// A new diagram: your template when there is one, else empty with the choices from Settings.
     static func newDiagram() -> Diagram {
+        if hasTemplate, let data = try? Data(contentsOf: templateURL), let template = try? Diagram.decode(data) { return template }
         var diagram = Diagram()
         diagram.display.notation = notation
+        diagram.display.names = physicalNames ? .physical : .logical
+        diagram.display.level = level
+        diagram.display.showTypes = showTypes
+        diagram.display.showConstraints = showConstraints
+        diagram.display.lineJumps = lineJumps
         diagram.dialect = dialect
         return diagram
     }
@@ -59,7 +102,7 @@ final class SettingsWindowController: NSWindowController {
     static let shared = SettingsWindowController()
 
     private init() {
-        let size = NSSize(width: 580, height: 520)
+        let size = NSSize(width: 620, height: 660)
         let window = makeMabenWindow(size: size, resizable: false)
         window.title = "Settings"
         super.init(window: window)
@@ -86,6 +129,13 @@ struct SettingsView: View {
     @State private var appearance = Appearance.current
     @State private var notation = Preferences.notation
     @State private var dialect = Preferences.dialect
+    @State private var physical = Preferences.physicalNames
+    @State private var level = Preferences.level
+    @State private var types = Preferences.showTypes
+    @State private var constraints = Preferences.showConstraints
+    @State private var jumps = Preferences.lineJumps
+    @State private var hasTemplate = Preferences.hasTemplate
+    @AppStorage("files.backup") private var backup = false
     @AppStorage("showHints") private var showHints = true
     @AppStorage("showMap") private var showMap = false
     @State private var showGrid = Grid.show
@@ -110,7 +160,46 @@ struct SettingsView: View {
                     }
                     .labelsHidden().frame(width: 180)
                     .onChange(of: dialect) { _, v in Preferences.dialect = v }
-                    Text("The notation and the database a new diagram starts with. Each diagram keeps its own after that.")
+                    HStack(spacing: 14) {
+                        Toggle("Table and column names", isOn: $physical).onChange(of: physical) { _, v in Preferences.physicalNames = v }
+                        Toggle("Types", isOn: $types).onChange(of: types) { _, v in Preferences.showTypes = v }
+                        Toggle("Not null, unique", isOn: $constraints).onChange(of: constraints) { _, v in Preferences.showConstraints = v }
+                    }
+                    .toggleStyle(.checkbox)
+                    HStack(spacing: 14) {
+                        Picker("", selection: $level) {
+                            Text("Shows everything").tag(DetailLevel.all)
+                            Text("Shows keys only").tag(DetailLevel.keys)
+                            Text("Shows names only").tag(DetailLevel.namesOnly)
+                        }
+                        .labelsHidden().frame(width: 180)
+                        .onChange(of: level) { _, v in Preferences.level = v }
+                        Toggle("Lines hop over each other", isOn: $jumps).toggleStyle(.checkbox).onChange(of: jumps) { _, v in Preferences.lineJumps = v }
+                    }
+                    Text("What a new diagram starts with. Each diagram keeps its own after that.")
+                        .font(.system(size: 11.5)).foregroundStyle(MB.dim).fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Button("Start New Diagrams as the One in Front") {
+                            guard let doc = NSDocumentController.shared.documents.compactMap({ $0 as? SchemaDocument }).first(where: { $0.windowControllers.first?.window?.isMainWindow == true })
+                                    ?? NSDocumentController.shared.documents.compactMap({ $0 as? SchemaDocument }).first else { return }
+                            try? Preferences.saveTemplate(doc.store.diagram)
+                            hasTemplate = Preferences.hasTemplate
+                        }
+                        .buttonStyle(.mbQuiet)
+                        if hasTemplate {
+                            Button("Start Empty Again") { Preferences.removeTemplate(); hasTemplate = false }.buttonStyle(.mbQuiet)
+                        }
+                    }
+                    if hasTemplate {
+                        Text("New diagrams start as a copy of the diagram you chose: its kinds, types, domains, SQL options and everything drawn on it.")
+                            .font(.system(size: 11.5)).foregroundStyle(MB.dim).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            row("Files") {
+                VStack(alignment: .leading, spacing: 5) {
+                    Toggle("Keep the version before each save beside the file", isOn: $backup).toggleStyle(.checkbox)
+                    Text("Diagrams save by themselves, and File › Revert To has every earlier version. This also leaves the one before the last save in the folder, with ~ after its name.")
                         .font(.system(size: 11.5)).foregroundStyle(MB.dim).fixedSize(horizontal: false, vertical: true)
                 }
             }

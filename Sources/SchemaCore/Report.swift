@@ -122,7 +122,7 @@ public enum Report {
         return "\(s.parent.tableName).\(s.column.columnName)"
     }
 
-    static func kindText(_ k: RelationshipKind) -> String {
+    public static func kindText(_ k: RelationshipKind) -> String {
         switch k {
         case .identifying: "identifying"
         case .nonIdentifying: "non-identifying"

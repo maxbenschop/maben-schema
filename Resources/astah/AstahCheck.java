@@ -80,7 +80,9 @@ public class AstahCheck {
             out.println("DOMAIN " + d.getLogicalName() + "|" + s(d.getPhysicalName()) + "|" + s(d.getDatatypeName()) + "|" + s(d.getLengthPrecision()) + "|nn=" + yes(d.isNotNull())
                 + "|" + s(d.getDefaultValue()) + "|" + s(parents.get(d.getId())) + "|" + s(d.getDefinition()));
         }
-        for (INamedElement d : pa.findElements(IERDiagram.class)) {
+        List<INamedElement> diagrams = new ArrayList<>(Arrays.asList(pa.findElements(IERDiagram.class)));
+        diagrams.sort(Comparator.comparingLong(d -> Long.parseLong(d.getId().substring(0, d.getId().indexOf('-')), 36)));
+        for (INamedElement d : diagrams) {
             IERDiagram dg = (IERDiagram) d;
             int boxes = 0, lines = 0, notes = 0, anchors = 0, texts = 0, shapes = 0;
             for (IPresentation p : dg.getPresentations()) {

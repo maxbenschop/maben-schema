@@ -297,6 +297,35 @@ enum SelfTest {
         store.restack(toFront: true)
         check(store.scene.boxes.last?.id == author, "bring to front draws it last")
 
+        // A second diagram of the same model, with one entity; and back.
+        let entitiesBefore = store.diagram.entities.count, boxesBefore = store.scene.boxes.count
+        store.selection = .entities([book])
+        store.newSheet(.selection)
+        check(store.diagram.hasSeveralSheets && store.scene.boxes.map(\.id) == [book], "a new diagram with the selection shows only that entity")
+        check(store.diagram.entities.count == entitiesBefore, "the model still has every entity")
+        check(store.scene.links.isEmpty, "a line to an entity that isn't on the diagram isn't drawn")
+        store.putOnDiagram(author)
+        check(store.scene.boxes.count == 2 && store.scene.links.count == 1, "putting the other entity on the diagram brings its line")
+        store.selection = .entities([author])
+        store.takeOffDiagram()
+        check(store.scene.boxes.count == 1 && store.diagram.entity(author) != nil, "taking it off the diagram leaves it in the model")
+        store.stepSheet(-1)
+        check(store.scene.boxes.count == boxesBefore, "the first diagram is as it was")
+        store.removeSheet(store.diagram.sheetTabs.last!.id)
+        check(!store.diagram.hasSeveralSheets, "a diagram can be deleted")
+
+        // A script changes the diagram in one step that can be undone; a wrong one changes nothing.
+        let scripted = store.runScript("diagram.entities.forEach(function (e) { if (!attribute(e, 'created_at')) addAttribute(e, 'created_at timestamp not null'); }); log(diagram.entities.length);")
+        check(scripted.error == nil && scripted.log == ["\(store.diagram.entities.count)"], "a script reads the diagram and logs (\(scripted.error ?? ""))")
+        check(store.diagram.entities.allSatisfy { $0.attributes.contains { $0.name == "created_at" && $0.type == "TIMESTAMP" && $0.notNull } }, "and what it adds is typed like a line on the canvas")
+        store.undoManager?.undo()
+        check(!store.diagram.entities.contains { $0.attributes.contains { $0.name == "created_at" } }, "one undo takes back everything the script did")
+        let broken = store.runScript("diagram.entities = 5; nothing.here();")
+        check(broken.error != nil && broken.diagram == nil, "a script that fails changes nothing")
+        let made = store.runScript("var a = addEntity('Publisher', ['*id integer auto', 'name varchar(80) not null'], 900, 200); relate(a, entity('Book'), 'publishes');")
+        check(made.error == nil && store.diagram.entities.contains { $0.name == "Publisher" } && store.diagram.entity(book)!.attributes.contains { $0.name == "publisher_id" }, "a script can add an entity and relate it; the foreign key appears (\(made.error ?? ""))")
+        store.undoManager?.undo()
+
         // Right-click menus exist for an entity, a line and the sheet.
         func menuTitles(_ p: CGPoint) -> [String] {
             canvas.menu(for: event(.rightMouseDown, p))?.items.map(\.title) ?? []

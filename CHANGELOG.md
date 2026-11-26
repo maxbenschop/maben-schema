@@ -21,7 +21,11 @@ releases as the GitHub release notes, and schema.maben.gg/changelog is built fro
 - Pictures as JPEG and SVG as well, and PNG and JPEG at 1× to 4×; a picture is now exactly the size it says on any screen (on a Retina screen a PNG came out twice as large)
 - Export Document: one web page with the picture and a table per entity, or RTF for a word processor
 - Print, on one page or over several, with Page Setup
-- Export for Astah (File menu, and ⌘K): an `.asta` file that Astah Professional opens with the same entities, attributes, keys, types, domains and relationships, in the same places and with the same lines, in the notation that was showing
+- Several diagrams of one model in a file, as tabs under the canvas: each with its own places, notation, detail and notes
+- Compare With another diagram, a SQL script or a sheet of tables, and bring in what the other has more
+- Scripts: JavaScript that reads or changes the diagram, in one step you can undo
+- Settings: what a new diagram starts with (or a diagram of your own to start from), and a copy of the version before each save
+- Export for Astah (File menu, and ⌘K): an `.asta` file that Astah Professional opens with the same entities, attributes, keys, types, domains and relationships, in the same places and with the same lines, in the notation that was showing, with a diagram in Astah for each diagram here
 
 ## 0.1 · 20 November 2026
 
