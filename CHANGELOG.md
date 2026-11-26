@@ -3,7 +3,7 @@
 Every release of Maben Schema. The newest version is at the top. `publish.sh` uses the section for the version it
 releases as the GitHub release notes, and schema.maben.gg/changelog is built from this file.
 
-## 0.2 · not released yet
+## 0.2 · 26 November 2026
 
 - Subtypes: a relationship can say "is a kind of", with the attribute that tells the kinds apart and whether the kinds are all there are
 - Indexes on an entity, unique or not, over one or more attributes, marked AK and IE on the diagram, written to the SQL and read from it
@@ -26,6 +26,7 @@ releases as the GitHub release notes, and schema.maben.gg/changelog is built fro
 - Scripts: JavaScript that reads or changes the diagram, in one step you can undo
 - Settings: what a new diagram starts with (or a diagram of your own to start from), and a copy of the version before each save
 - Export for Astah (File menu, and ⌘K): an `.asta` file that Astah Professional opens with the same entities, attributes, keys, types, domains and relationships, in the same places and with the same lines, in the notation that was showing, with a diagram in Astah for each diagram here
+- A diagram that uses any of the new things is saved in a newer file format, which version 0.1 refuses to open rather than lose them; a diagram that uses none is saved exactly as before
 
 ## 0.1 · 20 November 2026
 
