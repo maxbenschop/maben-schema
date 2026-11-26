@@ -61,6 +61,14 @@ jobs:
           .build/debug/Schema --features --export="$out/all.svg" && xmllint --noout "$out/all.svg"
           .build/debug/Schema --features --export="$out/all.html" && grep -q "<h2 id=\"person\">Person</h2>" "$out/all.html"
           .build/debug/Schema --features --sql-options=drop,quote,after,ifnotexists --dialect=sqlite --export="$out/opts.sql" && sqlite3 :memory: < "$out/opts.sql"
+      - name: A script changes the diagram, and a compare with itself finds nothing
+        run: |
+          out=$(mktemp -d)
+          echo "addEntity('Audit', ['*id integer auto', 'what text']); log(diagram.entities.length);" > "$out/add.js"
+          .build/debug/Schema --script="$out/add.js" --export="$out/more.sql" | grep -q "^9$"
+          grep -q "CREATE TABLE audit (" "$out/more.sql"
+          .build/debug/Schema --features --export="$out/all.mschema"
+          .build/debug/Schema --open="$out/all.mschema" --compare="$out/all.mschema" | grep -q "^0 only here, 0 only in all.mschema, 0 different$"
       - name: Scripts parse
         run: |
           zsh -n release.sh

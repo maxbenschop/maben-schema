@@ -47,17 +47,23 @@ Bug reports and ideas are welcome as [issues](https://github.com/maxbenschop/mab
 
 **Lines your way.** Drag a line and a point is put in it there: the line now goes through your points (drag a point to move it, double-click to take it out). A line can also be straight or curved, in its own colour, with its name or its "how many" hidden. Lines can hop over each other where they cross. Find Every Line's Way Again puts them back.
 
+**Several diagrams of one model.** Diagram › New Diagram of This Model adds a diagram of the same entities: empty, with every entity, with the selected ones (laid out afresh), or as a copy. Each has its own places, notation, level of detail, bent lines and notes; the entities, attributes and relationships are the model's, so a change shows on every diagram and there is one SQL script. Tabs under the canvas switch between them (⌘{ and ⌘}). Take Off This Diagram leaves an entity in the model; the entity list shows those lighter, and a double-click puts one on.
+
+**Compare and merge.** File › Compare With takes another diagram, a SQL script or a sheet of tables and lists what is only here, only there, and different, matched by table and column name. Bring In What Is Only There adds the entities, attributes, relationships and domains the other has more; nothing here is changed or removed.
+
+**Scripts.** Diagram › Run Script (⌥⌘R) runs JavaScript on the diagram: `diagram` is the model, shaped like the file, and what the script leaves in it becomes the diagram, as one step to undo. There are helpers (`entity`, `addEntity`, `addAttribute`, `relate`, `log`) and examples in the sheet. A script has no files and no network.
+
 **Problems.** A chip on the canvas counts what would go wrong in a database (no primary key, two attributes with one name, a relationship to an entity without a key) and takes you there.
 
 **Sheets in.** File › Import Spreadsheet (or drop the file) reads an Excel or CSV file with a row per attribute: a header that names the entity or table and the attribute or column, and what there is of type, length, primary key, not null, unique, default, definition and references (`customer.id` becomes a relationship). A data dictionary saved from here comes back as the same tables.
 
 **Out.** Export Image: PNG or JPEG at 1× to 4× (72 to 288 dots an inch), PDF, or SVG (shapes and text a browser or drawing program can take apart); light or dark; with or without a background. Copy Diagram as Image (⇧⌘C) for a report. A data dictionary as an Excel workbook (a sheet each for entities, attributes, indexes, relationships and domains), Markdown or CSV. Export Document: one web page with the picture and a table per entity, or the same as RTF for a word processor. Print (⌘P) puts the diagram on one page or at its own size over several, with the title, date and page number in the margins; Page Setup (⇧⌘P) has the paper.
 
-**To Astah.** File › Export for Astah writes an `.asta` file that Astah Professional opens as an ER model with one ER diagram: the same entities, attributes, keys, types, lengths, defaults, domains and relationships, in the same places, with the lines bent where they bent and the notation that was showing. Astah can go on working in it. Subtypes, indexes, kinds of entity, domains under domains, both names of a relationship and the other names and tags go along as what Astah calls them. A type Astah doesn't start with (`INTEGER`, `TEXT`, `UUID`) is added to its data types under the same name; unique becomes a unique index, which Astah shows as an alternate key; what Astah has no place for (counts up by itself, the rules on delete and update) goes along as tagged values. Notes (with what they are about), text, rectangles and straight lines go along too; a drawing by hand, an oval and a picture don't, as there is no way to hand those to Astah. Astah sizes its boxes itself and writes more in them, so everything is set a little further apart sideways to keep the lines clear.
+**To Astah.** File › Export for Astah writes an `.asta` file that Astah Professional opens as an ER model with an ER diagram for each diagram here: the same entities, attributes, keys, types, lengths, defaults, domains and relationships, in the same places, with the lines bent where they bent and the notation that was showing. Astah can go on working in it. Subtypes, indexes, kinds of entity, domains under domains, both names of a relationship and the other names and tags go along as what Astah calls them. A type Astah doesn't start with (`INTEGER`, `TEXT`, `UUID`) is added to its data types under the same name; unique becomes a unique index, which Astah shows as an alternate key; what Astah has no place for (counts up by itself, the rules on delete and update) goes along as tagged values. Notes (with what they are about), text, rectangles and straight lines go along too; a drawing by hand, an oval and a picture don't, as there is no way to hand those to Astah. Astah sizes its boxes itself and writes more in them, so everything is set a little further apart sideways to keep the lines clear.
 
 **Files.** A diagram is a `.mschema` file: readable JSON with a stable key order, so it diffs in git. Standard Mac documents: saves by itself, Open Recent, Revert, undo for every change.
 
-**Settings** (⌘,): light, dark or follow the system; the notation and database new diagrams start with; hints, the map and the grid on the canvas; updates.
+**Settings** (⌘,): light, dark or follow the system; what new diagrams start with (notation, database, names, level of detail, types and marks, hopping lines), or a diagram of your own that every new one starts as; a copy of the version before each save; hints, the map and the grid on the canvas; updates.
 
 ## Keys
 
@@ -75,6 +81,9 @@ Bug reports and ideas are welcome as [issues](https://github.com/maxbenschop/mab
 | ⌥⌘C, ⌥⌘V | Copy colours, paste colours |
 | ⇧⌘], ⇧⌘[ | Bring to front, send to back |
 | ⌥⌘M, ⌘', ⇧⌘' | Map, grid, snap to grid |
+| ⌘{, ⌘} | Previous diagram, next diagram |
+| ⌥⌘R | Run a script |
+| ⌘P, ⇧⌘P | Print, page setup |
 | esc | Back to the pointer; nothing selected |
 | ⌥⌘S, ⌥⌘I, ⌃⌘S | SQL, inspector, entity list |
 | ⌘+, ⌘−, ⌘0, ⌘1 | Zoom in, out, actual size, fit. Pinch, or ⌘-scroll, zooms at the pointer |
@@ -92,7 +101,7 @@ Runs on macOS 14 or later. Built here with Xcode 27 (Swift 6.4, in Swift 5 mode)
 ./build.sh xcode      # make and open an Xcode project (needs xcodegen)
 ```
 
-The self-test (`Schema --selftest`) walks through typing, dragging, undo, copy and paste, import and export by calling what the mouse and keyboard call, in a window nobody sees, with its own clipboard. `Schema --snapshot=<file.png>` draws the window into a PNG without showing it (`--appearance=dark`, `--select=Order`, `--relationship=0`, `--sql`, `--palette`, `--notation=idef1x`, `--names=physical`, `--edit=Tag`, `--empty`, `--size=1360x860`), and `--export=<file.png|jpg|pdf|svg|sql|md|csv|xlsx|html|asta|mschema>` writes the sample, `--features` (a diagram with one of everything), `--open=<file>`, `--from-sql=<file>` or `--from-sheet=<file.xlsx|csv>` (`--scale=1…4` for a PNG or JPEG, `--sql-options=drop,quote,after,…` for the SQL), and `--print=<file.pdf>` saves what Print puts on paper. `--import-file=<file.sql>` and `--import-sheet=<file.sql>` read a SQL file the way a drop and the import sheet do, and `--bench[=tables]` times reading, drawing and dragging on a large diagram (1000 tables by default).
+The self-test (`Schema --selftest`) walks through typing, dragging, undo, copy and paste, import and export by calling what the mouse and keyboard call, in a window nobody sees, with its own clipboard. `Schema --snapshot=<file.png>` draws the window into a PNG without showing it (`--appearance=dark`, `--select=Order`, `--relationship=0`, `--sql`, `--palette`, `--notation=idef1x`, `--names=physical`, `--edit=Tag`, `--empty`, `--size=1360x860`), and `--export=<file.png|jpg|pdf|svg|sql|md|csv|xlsx|html|asta|mschema>` writes the sample, `--features` (a diagram with one of everything), `--open=<file>`, `--from-sql=<file>` or `--from-sheet=<file.xlsx|csv>` (`--scale=1…4` for a PNG or JPEG, `--sql-options=drop,quote,after,…` for the SQL), and `--print=<file.pdf>` saves what Print puts on paper. `--import-file=<file.sql>` and `--import-sheet=<file.sql>` read a SQL file the way a drop and the import sheet do, and `--bench[=tables]` times reading, drawing and dragging on a large diagram (1000 tables by default). `--compare=<file>` prints how the diagram differs from another, and `--script=<file.js>` runs a script on it first.
 
 `./release.sh` builds the universal, notarized download (`dist/Maben-Schema.dmg` and `.zip`), and `./publish.sh` tags it, creates the GitHub release and deploys schema.maben.gg. See `CONTRIBUTING.md`.
 
@@ -108,10 +117,11 @@ The app updates itself from GitHub Releases (`Sources/Schema/Updater.swift`), th
 |---|---|
 | `Sources/SchemaCore` | No UI. `SQLScan.swift` finds the table definitions in SQL of any size without reading the rows. `Model.swift` is the file format. `Rules.swift` keeps a diagram consistent (`normalize()` runs after every change and makes the foreign key columns match the relationships) and lists problems. `QuickEntry.swift` reads a typed line. `SQLExport.swift` and `SQLImport.swift` write and read CREATE TABLE. `Layout.swift` is Tidy Up, `Report.swift` the data dictionary, `Sample.swift` the sample |
 | `Sources/SchemaCore/Astah` | The Astah export. An `.asta` file is a ZIP holding a stream of Java objects: `JavaStream.swift` writes (and reads) that stream, `Zip.swift` the ZIP, `AstaClasses.swift` lists the classes Astah uses with what each field holds in a file it saved, and `AstaExport.swift` builds the model and the diagram out of them. `Resources/astah/check.sh` has your own copy of Astah open what was written and compares it with the diagram, line by line |
+| `Sources/SchemaCore/Sheets.swift`, `Compare.swift` | Several diagrams of one model (the one being shown lives in the file's ordinary fields, the others are swapped in and out); and what differs between two diagrams, and merging one into another |
 | `Sources/SchemaCore/Spreadsheet.swift`, `SheetImport.swift` | A workbook of plain tables, written and read as `.xlsx` (a ZIP of XML) and read from CSV; and a diagram built from a sheet with a row per attribute |
 | `Sources/Schema` | The app: AppKit windows with SwiftUI inside. `Updater.swift` and `Settings.swift` are the updates and the Settings window. `Store.swift` holds one open diagram and every change to it (each one undoable). `Scene.swift` measures the entities and routes the lines, `Render.swift` draws them (the canvas, the picture exports and the printer share it; `SVG.swift` follows it for SVG, and `DocumentExport.swift` writes the web page), `CanvasView.swift` is the mouse and keyboard. `EditorView.swift`, `Inspector.swift` and `SQLPanel.swift` are the window around it, `Document.swift` the file handling and exports, `Style.swift` the Maben look |
 
-Not in this version: several diagrams in one file, check constraints, reading a live database (Maben Base connects to those; the app itself never connects to anything), and opening an `.asta` file (it writes them: File › Export for Astah).
+Not in this version: check constraints, reading a live database (Maben Base connects to those; the app itself never connects to anything), and opening an `.asta` file (it writes them: File › Export for Astah).
 
 ## Licence
 

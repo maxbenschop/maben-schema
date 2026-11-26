@@ -19,6 +19,8 @@ final class SchemaDocument: NSDocument {
     }
 
     override class var autosavesInPlace: Bool { true }
+    /// Settings › Files: the version before a save is kept beside the file, with "~" after its name.
+    override var keepBackupFile: Bool { UserDefaults.standard.bool(forKey: "files.backup") }
     override class var readableTypes: [String] { [schemaTypeName] }
     override class var writableTypes: [String] { [schemaTypeName] }
     override class func isNativeType(_ type: String) -> Bool { type == schemaTypeName }
@@ -198,6 +200,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     @objc func toggleGrid(_ sender: Any?) { Grid.show.toggle() }
     @objc func toggleSnap(_ sender: Any?) { Grid.snaps.toggle() }
 
+    @objc func newSheet(_ sender: Any?) {
+        let kinds: [DiagramStore.NewSheet] = [.empty, .everything, .selection, .copy]
+        guard let tag = (sender as? NSMenuItem)?.tag, kinds.indices.contains(tag) else { return }
+        store.newSheet(kinds[tag])
+    }
+    @objc func renameSheet(_ sender: Any?) { store.renameSheet(store.diagram.sheetID) }
+    @objc func deleteSheet(_ sender: Any?) { store.removeSheet(store.diagram.sheetID) }
+    @objc func nextSheet(_ sender: Any?) { store.stepSheet(1) }
+    @objc func previousSheet(_ sender: Any?) { store.stepSheet(-1) }
+    @objc func takeOffDiagram(_ sender: Any?) { store.takeOffDiagram() }
+
     // MARK: View menu
 
     @objc func toggleSidebar(_ sender: Any?) { store.showSidebar.toggle() }
@@ -217,6 +230,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         case #selector(duplicateSelection(_:)): return !store.selection.entityIDs.isEmpty || !store.selectedAnnotations.isEmpty
         case #selector(alignSelection(_:)), #selector(sameWidth(_:)): return store.selection.entityIDs.count > 1
         case #selector(bringToFront(_:)), #selector(sendToBack(_:)): return store.canArrange
+        case #selector(newSheet(_:)): return item.tag != 2 || !store.selection.entityIDs.isEmpty
+        case #selector(deleteSheet(_:)), #selector(nextSheet(_:)), #selector(previousSheet(_:)): return d.hasSeveralSheets
+        case #selector(takeOffDiagram(_:)): return !store.selection.entityIDs.isEmpty
         case #selector(copyStyle(_:)): return store.canCopyStyle
         case #selector(pasteStyle(_:)): return store.canPasteStyle
         case #selector(toggleLineJumps(_:)): item.state = d.display.lineJumps ? .on : .off
@@ -244,6 +260,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
 
     @objc func importSQL(_ sender: Any?) { store.sheet = .importSQL }
     @objc func importSpreadsheet(_ sender: Any?) { store.chooseSheet() }
+    @objc func compareWith(_ sender: Any?) { store.chooseComparison() }
+    @objc func runScript(_ sender: Any?) { store.sheet = .script }
 
     fileprivate var baseName: String {
         (document?.displayName ?? "diagram").replacingOccurrences(of: ".\(schemaExtension)", with: "")
@@ -340,7 +358,7 @@ extension EditorWindowController {
         var options = AstaExport.Options()
         options.diagramName = baseName
         save(baseName + "." + AstaExport.fileExtension, types: [UTType(filenameExtension: AstaExport.fileExtension) ?? .data]) { url in
-            try AstaExport.data(for: d, layout: layout, options: options).write(to: url)
+            try AstaExport.data(for: d, layout: layout, options: options, others: Scene.astaOthers(of: d)).write(to: url)
         }
     }
 }

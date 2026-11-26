@@ -124,4 +124,40 @@ final class ExportTests: XCTestCase {
         XCTAssertEqual(result.diagram.relationships.first.map { [$0.parent, $0.child] }, [result.diagram.entities[0].id, result.diagram.entities[1].id])
         XCTAssertEqual(SheetImport.parse(Workbook(csv: "just,some\nnumbers,here")).tables, 0, "a sheet that isn't about tables gives nothing")
     }
+
+    func testComparingAndMergingTwoDiagrams() throws {
+        let old = SQLImport.parse("""
+        CREATE TABLE customer (id INT PRIMARY KEY, name VARCHAR(80) NOT NULL, phone VARCHAR(20));
+        CREATE TABLE invoice (id INT PRIMARY KEY, customer_id INT NOT NULL REFERENCES customer(id));
+        """).diagram
+        let new = SQLImport.parse("""
+        CREATE TABLE customer (id INT PRIMARY KEY, name VARCHAR(120) NOT NULL, email VARCHAR(255) UNIQUE);
+        CREATE TABLE invoice (id INT PRIMARY KEY, customer_id INT NOT NULL REFERENCES customer(id) ON DELETE CASCADE);
+        CREATE TABLE payment (id INT PRIMARY KEY, invoice_id INT NOT NULL REFERENCES invoice(id), amount DECIMAL(10,2));
+        """).diagram
+        let diff = DiagramDiff.compare(old, new)
+        func has(_ kind: DiagramDiff.Kind, _ subject: String) -> DiagramDiff.Change? { diff.changes.first { $0.kind == kind && $0.subject == subject } }
+        XCTAssertNotNil(has(.added, "Entity payment"))
+        XCTAssertNotNil(has(.added, "customer.email"))
+        XCTAssertNotNil(has(.removed, "customer.phone"))
+        XCTAssertEqual(has(.changed, "customer.name")?.details, ["type VARCHAR(80) → VARCHAR(120)"])
+        XCTAssertEqual(has(.changed, "Relationship customer → invoice")?.details, ["on delete NO ACTION → CASCADE"])
+        XCTAssertNotNil(has(.added, "Relationship invoice → payment"))
+        XCTAssertTrue(DiagramDiff.compare(new, new).changes.isEmpty)
+
+        // Bringing the newer one into the older: what it has more comes in, nothing goes.
+        var merged = old
+        let result = merged.merge(new)
+        XCTAssertEqual(result.entities, 1)
+        XCTAssertEqual(result.attributes, 1)
+        XCTAssertEqual(result.relationships, 1)
+        let customer = try XCTUnwrap(merged.entities.first { $0.name == "customer" })
+        XCTAssertEqual(customer.attributes.map(\.name), ["id", "name", "phone", "email"], "its own column stays, the new one is added")
+        XCTAssertEqual(customer.attributes[1].type, "VARCHAR(80)", "what both have is left as it was")
+        let payment = try XCTUnwrap(merged.entities.first { $0.name == "payment" })
+        XCTAssertEqual(payment.attributes.map(\.name), ["id", "amount", "invoice_id"], "the foreign key is made by the relationship")
+        XCTAssertTrue(merged.problems().isEmpty, "\(merged.problems().map(\.message))")
+        XCTAssertTrue(merged.merge(new).isEmpty, "a second time there is nothing left to bring in")
+        _ = SQLExport.script(for: merged)
+    }
 }

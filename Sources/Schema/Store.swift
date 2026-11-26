@@ -103,7 +103,10 @@ final class DiagramStore: ObservableObject {
     /// The attribute whose extra fields are open in the inspector.
     @Published var expandedAttribute: UUID?
 
-    enum Sheet: String, Identifiable { case importSQL, addDomains, replace; var id: String { rawValue } }
+    enum Sheet: String, Identifiable { case importSQL, addDomains, replace, compare, script; var id: String { rawValue } }
+
+    /// The other diagram File › Compare With… was pointed at, and its name.
+    @Published var compared: (name: String, diagram: Diagram)?
 
     weak var undoManager: UndoManager?
     weak var canvas: CanvasView?
@@ -365,7 +368,8 @@ final class DiagramStore: ObservableObject {
     }
 
     func selectAll() {
-        selection = diagram.entities.isEmpty ? .none : .entities(Set(diagram.entities.map(\.id)))
+        let shown = Set(scene.boxes.map(\.id))
+        selection = shown.isEmpty ? .none : .entities(shown)
         selectedAnnotations = Set(diagram.annotations.map(\.id))
     }
 
@@ -670,15 +674,17 @@ final class DiagramStore: ObservableObject {
 
     /// Lays the selected entities out (or everything when fewer than two are selected).
     func tidyUp() {
-        let chosen = selection.entityIDs.count > 1 ? selection.entityIDs : nil
         let scene = self.scene
+        // What is selected, or everything on this diagram (entities that aren't on it are left where they are).
+        let chosen = selection.entityIDs.count > 1 ? selection.entityIDs : diagram.hidden.isEmpty ? nil : Set(scene.boxes.map(\.id))
+        let all = selection.entityIDs.count <= 1
         let origin: Point
-        if let chosen, let b = scene.bounds(of: chosen) { origin = Point(Double(b.minX), Double(b.minY)) } else { origin = Point(80, 80) }
+        if !all, let chosen, let b = scene.bounds(of: chosen) { origin = Point(Double(b.minX), Double(b.minY)) } else { origin = Point(80, 80) }
         let positions = AutoLayout.positions(for: diagram, sizes: scene.sizes, only: chosen, origin: origin)
         edit("Tidy Up") { d in
             for (id, p) in positions { d.update(entity: id) { $0.position = p } }
         }
-        if chosen == nil { DispatchQueue.main.async { [weak self] in self?.canvas?.zoomToFit() } }
+        if all { DispatchQueue.main.async { [weak self] in self?.canvas?.zoomToFit() } }
     }
 
     func align(_ how: Alignment) {
@@ -711,6 +717,125 @@ final class DiagramStore: ObservableObject {
                 d.update(entity: id) { $0.position = Point(x, y) }
             }
         }
+    }
+
+    // MARK: Comparing with, and merging from, another diagram
+
+    /// Asks for a file (a diagram, a SQL script or a sheet of tables) and shows how this diagram differs from it.
+    func chooseComparison() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: schemaExtension) ?? .json, UTType(filenameExtension: "sql") ?? .plainText, UTType(filenameExtension: "xlsx") ?? .data, .commaSeparatedText]
+        panel.message = "Choose the diagram to compare this one with: an older copy, a colleague’s, or the SQL of the database as it is."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        compare(with: url)
+    }
+
+    func compare(with url: URL) {
+        do {
+            let other: Diagram
+            switch url.pathExtension.lowercased() {
+            case schemaExtension: other = try Diagram.decode(Data(contentsOf: url))
+            case "xlsx", "csv": other = try SheetImport.parse(contentsOf: url).diagram
+            default: other = try SQLImport.parse(contentsOf: url).diagram
+            }
+            compared = (url.lastPathComponent, other)
+            sheet = .compare
+        } catch {
+            showError(error, in: window, title: "Couldn’t read \(url.lastPathComponent)")
+        }
+    }
+
+    /// Brings in what the compared diagram has and this one hasn't. Returns what came in.
+    @discardableResult
+    func mergeCompared() -> Diagram.Merged {
+        guard let other = compared?.diagram else { return Diagram.Merged() }
+        var result = Diagram.Merged()
+        edit("Bring In From Another Diagram") { result = $0.merge(other) }
+        if result.entities > 0 { DispatchQueue.main.async { [weak self] in self?.canvas?.zoomToFit() } }
+        return result
+    }
+
+    // MARK: Several diagrams of one model
+
+    private func afterSwitch() {
+        selection = .none
+        selectedAnnotations = []
+        canvas?.diagramReplaced()
+    }
+
+    func showSheet(_ id: UUID) {
+        guard id != diagram.sheetID else { return }
+        edit("Show Another Diagram") { $0.activate(id) }
+        afterSwitch()
+    }
+
+    /// The diagram before or after the one being shown, going round.
+    func stepSheet(_ by: Int) {
+        let tabs = diagram.sheetTabs
+        guard tabs.count > 1, let i = tabs.firstIndex(where: { $0.id == diagram.sheetID }) else { return }
+        showSheet(tabs[(i + by + tabs.count) % tabs.count].id)
+    }
+
+    enum NewSheet { case empty, everything, selection, copy }
+
+    func newSheet(_ what: NewSheet) {
+        let chosen = selection.entityIDs
+        edit("New Diagram") { d in
+            switch what {
+            case .empty: d.addSheet(with: [])
+            case .everything: d.addSheet()
+            case .selection: d.addSheet(with: chosen)
+            case .copy: d.addSheet(copy: true)
+            }
+        }
+        afterSwitch()
+        // Entities that came from another diagram keep their places; laid out afresh they read better.
+        if what == .selection, chosen.count > 1 { tidyUp() }
+    }
+
+    func removeSheet(_ id: UUID) {
+        guard diagram.hasSeveralSheets else { return }
+        edit("Delete Diagram") { $0.removeSheet(id) }
+        afterSwitch()
+    }
+
+    /// Asks for a new name for a diagram.
+    func renameSheet(_ id: UUID) {
+        guard let current = diagram.sheetTabs.first(where: { $0.id == id })?.name else { return }
+        let alert = NSAlert()
+        alert.messageText = "Rename this diagram"
+        alert.informativeText = "Its entities are those of the model; only the diagram gets another name."
+        let field = NSTextField(string: current)
+        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+            guard response == .alertFirstButtonReturn, !name.isEmpty, name != current else { return }
+            self?.edit("Rename Diagram") { $0.renameSheet(id, to: name) }
+        }
+        if let window { alert.beginSheetModal(for: window, completionHandler: finish) } else { finish(alert.runModal()) }
+    }
+
+    /// Takes the selected entities off this diagram: they stay in the model, and on the other diagrams.
+    func takeOffDiagram() {
+        let ids = selection.entityIDs
+        guard !ids.isEmpty else { return }
+        edit(ids.count == 1 ? "Take Off This Diagram" : "Take \(ids.count) Off This Diagram") { $0.setHidden(ids, true) }
+        selection = .none
+    }
+
+    /// Puts an entity of the model on this diagram, in the middle of what you see.
+    func putOnDiagram(_ id: UUID) {
+        guard diagram.isHidden(id) else { select(entity: id); return }
+        let p = canvas?.visibleCentre ?? CGPoint(x: 200, y: 160)
+        edit("Put on This Diagram") { d in
+            d.setHidden([id], false)
+            d.update(entity: id) { $0.position = Point(Grid.snap(Double(p.x) - 90), Grid.snap(Double(p.y) - 60)) }
+        }
+        select(entity: id)
     }
 
     // MARK: Notes, shapes and drawings

@@ -265,4 +265,79 @@ final class ModellingTests: XCTestCase {
         XCTAssertNil(d.annotations[0].entity)
         XCTAssertNil(d.annotations[0].attribute)
     }
+
+    func testSeveralDiagramsOfOneModel() throws {
+        var d = Sample.shop()
+        let customer = d.entities[0].id, order = d.entities[2].id
+        let first = d.sheetID
+        let place = d.entity(customer)!.position
+        XCTAssertFalse(d.hasSeveralSheets)
+
+        // A second diagram with two of the entities, somewhere else, drawn another way.
+        let second = d.addSheet(named: "Orders", with: [customer, order])
+        XCTAssertEqual(d.sheetID, second)
+        XCTAssertEqual(d.sheetTabs.map(\.name), ["Diagram 1", "Orders"])
+        XCTAssertEqual(Set(d.entities.map(\.id)).subtracting(d.hidden), [customer, order], "the other entities are in the model, not on this diagram")
+        d.update(entity: customer) { $0.position = Point(900, 900) }
+        d.display.notation = .idef1x
+        d.annotations = [Annotation(kind: .note, x: 0, y: 0, width: 100, height: 40, text: "second")]
+        d.update(relationship: d.relationships[0].id) { $0.waypoints = [Point(1, 2)] }
+        d.normalize()
+
+        // Back on the first: its own places, notation and (no) notes; nothing of the model changed.
+        XCTAssertTrue(d.activate(first))
+        XCTAssertEqual(d.entity(customer)!.position, place)
+        XCTAssertEqual(d.display.notation, .ie)
+        XCTAssertTrue(d.annotations.isEmpty && d.hidden.isEmpty)
+        XCTAssertTrue(d.relationships[0].waypoints.isEmpty)
+        XCTAssertEqual(d.entities.count, 8)
+        XCTAssertEqual(SQLExport.script(for: d), SQLExport.script(for: Sample.shop()).replacingOccurrences(of: "", with: ""), "the SQL is the model's, whatever diagram is showing")
+
+        // And forth again: the second kept what it was given.
+        d.activate(second)
+        XCTAssertEqual(d.entity(customer)!.position, Point(900, 900))
+        XCTAssertEqual(d.display.notation, .idef1x)
+        XCTAssertEqual(d.annotations.first?.text, "second")
+        XCTAssertEqual(d.relationships[0].waypoints, [Point(1, 2)])
+        XCTAssertEqual(d.sheetTabs.map(\.name), ["Diagram 1", "Orders"], "the tabs keep their order")
+
+        // A new entity is only on the diagram it was made on. Deleting an entity takes it off every diagram.
+        let made = d.addEntity(named: "Made Here", at: .zero)
+        d.normalize()
+        d.activate(first)
+        XCTAssertTrue(d.isHidden(made))
+        d.remove(entities: [order])
+        d.normalize()
+        XCTAssertFalse(d.sheets[0].placements.contains { $0.entity == order })
+
+        // The file keeps all of it, and says it needs the newer version.
+        let text = try XCTUnwrap(String(data: d.encoded(), encoding: .utf8))
+        XCTAssertTrue(text.contains("\"version\" : 2") && text.contains("\"sheets\""))
+        XCTAssertEqual(try Diagram.decode(d.encoded()), d)
+
+        // Removing the diagram being shown shows its neighbour; the last one stays.
+        d.removeSheet(d.sheetID)
+        XCTAssertEqual(d.sheetID, second)
+        XCTAssertFalse(d.hasSeveralSheets)
+        d.removeSheet(second)
+        XCTAssertEqual(d.sheetID, second)
+        XCTAssertEqual(d.entities.count, 8, "taking a diagram away takes nothing out of the model")
+    }
+
+    func testEveryDiagramGoesIntoTheAstahFile() throws {
+        let d = Sample.features()
+        XCTAssertEqual(d.sheetTabs.map(\.name), ["Everything", "People"])
+        let others: [AstaExport.Other] = d.sheets.map { (d.showing($0.id), AstaExport.Layout()) }
+        let entries = try Zip.entries(of: AstaExport.data(for: d, others: others))
+        let reader = try JavaStreamReader(entries[0].data, headerLength: 4)
+        _ = try reader.readAll()
+        let sheets = reader.objects.filter { $0.cls.shortName == "UERDiagramImp" }
+        XCTAssertEqual(Set(sheets.map { $0["name"].object?["body"].string ?? "" }), ["Everything", "People"])
+        let people = try XCTUnwrap(sheets.first { $0["name"].object?["body"].string == "People" })
+        XCTAssertEqual(people["notation"].string, "IDEF1X")
+        let drawn = (people["presentation"].object?.items ?? []).compactMap(\.object)
+        XCTAssertEqual(drawn.filter { $0.cls.shortName == "EREntityPresentation" }.count, 3, "only the entities on that diagram")
+        XCTAssertEqual(reader.objects.filter { $0.cls.shortName == "EREntityImp" }.count, 6, "one model under both")
+        XCTAssertTrue(AstaExport.manifest(for: d).contains("DIAGRAM IDEF1X|Logical Model|boxes=3|lines=2|notes=0|about=0|texts=1|shapes=0"))
+    }
 }

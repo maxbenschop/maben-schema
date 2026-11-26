@@ -8,6 +8,7 @@ extension Diagram {
     public mutating func normalize() {
         let ids = Set(entities.map(\.id))
         relationships.removeAll { !ids.contains($0.parent) || !ids.contains($0.child) }
+        pruneSheets()
         // A note about an entity that is gone is just a note.
         for i in annotations.indices where annotations[i].entity != nil {
             if let e = annotations[i].entity, !ids.contains(e) { annotations[i].entity = nil; annotations[i].attribute = nil }

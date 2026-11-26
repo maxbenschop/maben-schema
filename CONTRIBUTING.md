@@ -44,7 +44,8 @@ Tags matching `v*` can only be created, moved or deleted by repository admins, s
 - **Every change can be undone**, in one step per thing the user did.
 - **The file format only grows.** A `.mschema` file saved by any released version must still open: new fields get a default when they're missing, and nothing is renamed. Bump `Diagram.currentVersion` only when an older app must refuse the file.
 - **The importer never reads rows.** `SQLScan` steps over INSERT and COPY data on the raw bytes; only table definitions are turned into tokens. A dump of several hundred megabytes must stay around a second.
-- **The app never connects to a database** and sends nothing anywhere, except asking GitHub for the latest release.
+- **The app never connects to a database** and sends nothing anywhere, except asking GitHub for the latest release. A script (Diagram › Run Script) gets the diagram and nothing else: no files, no network.
+- **There is one model.** Entities, attributes, relationships and domains exist once, whatever diagram is showing; a diagram only says which entities are on it, where, and how it is drawn (`Sheets.swift`). The SQL and the rules never depend on which diagram is showing.
 - **What it writes for Astah opens in Astah.** The file format isn't published; `AstaExport` writes what Astah itself was seen to write. A change there is checked against Astah (`Resources/astah/check.sh`), not only against the tests.
 - **The SQL it writes runs.** A change to `SQLExport` comes with a test, and is worth loading into the real engine once.
 

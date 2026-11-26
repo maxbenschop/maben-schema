@@ -17,6 +17,7 @@ struct EditorView: View {
                 }
                 VStack(spacing: 0) {
                     CanvasArea(store: store)
+                    if store.diagram.hasSeveralSheets { SheetTabs(store: store) }
                     if store.showSQL {
                         SQLPanel(store: store).frame(height: store.sqlHeight)
                     }
@@ -39,7 +40,68 @@ struct EditorView: View {
             case .importSQL: ImportSheet(store: store).tint(MB.accent)
             case .addDomains: AddDomainsSheet(store: store).tint(MB.accent)
             case .replace: ReplaceSheet(store: store).tint(MB.accent)
+            case .compare: CompareSheet(store: store).tint(MB.accent)
+            case .script: ScriptSheet(store: store).tint(MB.accent)
             }
+        }
+    }
+}
+
+/// The diagrams of this model, as tabs under the canvas. They only show once there is more than one.
+struct SheetTabs: View {
+    @ObservedObject var store: DiagramStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Hairline()
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    ForEach(store.diagram.sheetTabs, id: \.id) { tab in
+                        SheetTab(store: store, id: tab.id, name: tab.name)
+                    }
+                    Menu {
+                        Button("Empty") { store.newSheet(.empty) }
+                        Button("With Every Entity") { store.newSheet(.everything) }
+                        Button("With the Selected Entities") { store.newSheet(.selection) }.disabled(store.selection.entityIDs.isEmpty)
+                        Button("A Copy of This One") { store.newSheet(.copy) }
+                    } label: {
+                        Image(systemName: "plus").font(.system(size: 11, weight: .semibold)).foregroundStyle(MB.muted).frame(width: 26, height: 24).contentShape(Rectangle())
+                    }
+                    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                    .help("New diagram of this model")
+                    .accessibilityLabel("New diagram")
+                }
+                .padding(.horizontal, 8)
+            }
+            .frame(height: 32)
+            .background(MB.bar)
+        }
+    }
+}
+
+struct SheetTab: View {
+    @ObservedObject var store: DiagramStore
+    let id: UUID
+    let name: String
+    @State private var hovering = false
+
+    var body: some View {
+        let on = store.diagram.sheetID == id
+        Button { store.showSheet(id) } label: {
+            Text(name)
+                .font(.system(size: 12, weight: on ? .semibold : .regular))
+                .foregroundStyle(on ? MB.text : MB.muted)
+                .lineLimit(1)
+                .padding(.horizontal, 11).frame(height: 24)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(on ? MB.selected : hovering ? MB.hover : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityAddTraits(on ? .isSelected : [])
+        .contextMenu {
+            Button("Rename…") { store.renameSheet(id) }
+            Button("Delete", role: .destructive) { store.removeSheet(id) }
         }
     }
 }
@@ -385,6 +447,8 @@ struct EntityRow: View {
 
     var body: some View {
         let selected = store.selection.entityIDs.contains(entity.id)
+        // In the model, but not on the diagram being shown: listed lighter, and put on it with a double-click.
+        let off = store.diagram.isHidden(entity.id)
         Button {
             store.select(entity: entity.id)
         } label: {
@@ -401,11 +465,17 @@ struct EntityRow: View {
             .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(selected ? MB.selected : hovering ? MB.hover : .clear))
             .padding(.horizontal, 6)
             .contentShape(Rectangle())
+            .opacity(off ? 0.5 : 1)
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .accessibilityLabel("\(entity.name), \(entity.attributes.count) attributes")
+        .simultaneousGesture(TapGesture(count: 2).onEnded { if off { store.putOnDiagram(entity.id) } })
+        .help(off ? "Not on this diagram. Double-click to put it on." : "")
+        .accessibilityLabel("\(entity.name), \(entity.attributes.count) attributes\(off ? ", not on this diagram" : "")")
         .contextMenu {
+            if off { Button("Put on This Diagram") { store.putOnDiagram(entity.id) } }
+            else { Button("Take Off This Diagram") { store.selection = .entities([entity.id]); store.takeOffDiagram() } }
+            Divider()
             Button("Rename") { store.select(entity: entity.id); store.canvas?.beginEdit(.entityName(entity.id)) }
             Button("Add Attribute") { store.select(entity: entity.id); store.canvas?.beginEdit(.newAttribute(entity: entity.id)) }
             Button("Duplicate") { store.selection = .entities([entity.id]); store.duplicateSelection() }
@@ -488,9 +558,14 @@ struct PaletteView: View {
             Item(id: "c.domain", title: "New Domain", detail: "", symbol: "textformat.abc") { store.newDomain() },
             Item(id: "c.domains", title: "Add Several Domains…", detail: "", symbol: "text.badge.plus") { store.sheet = .addDomains },
             Item(id: "c.tidy", title: "Tidy Up", detail: "⌃⌘L", symbol: "wand.and.stars") { store.tidyUp() },
+            Item(id: "c.sheet.new", title: "New Diagram of This Model", detail: "empty", symbol: "rectangle.stack.badge.plus") { store.newSheet(.empty) },
+            Item(id: "c.sheet.all", title: "New Diagram With Every Entity", detail: "", symbol: "rectangle.stack.badge.plus") { store.newSheet(.everything) },
+            Item(id: "c.sheet.copy", title: "Duplicate This Diagram", detail: "", symbol: "rectangle.stack.badge.plus") { store.newSheet(.copy) },
             Item(id: "c.note", title: "New Note", detail: "", symbol: "note.text") { store.newNote(.note) },
             Item(id: "c.text", title: "New Text", detail: "", symbol: "textformat") { store.newNote(.text) },
             Item(id: "c.picture", title: "Add a Picture…", detail: "", symbol: "photo") { store.chooseImage() },
+            Item(id: "c.script", title: "Run Script…", detail: "JavaScript", symbol: "curlybraces") { store.sheet = .script },
+            Item(id: "c.compare", title: "Compare With Another Diagram…", detail: "", symbol: "arrow.left.arrow.right.square") { store.chooseComparison() },
             Item(id: "c.replace", title: "Find and Replace…", detail: "⌥⌘F", symbol: "arrow.left.arrow.right") { store.sheet = .replace },
             Item(id: "c.jumps", title: store.diagram.display.lineJumps ? "Lines Cross Flat" : "Lines Hop Over Each Other", detail: "lines", symbol: "point.topleft.down.to.point.bottomright.curvepath") {
                 store.edit("Change Lines") { $0.display.lineJumps.toggle() }

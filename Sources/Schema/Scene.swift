@@ -188,7 +188,9 @@ final class Scene {
         let ordered = diagram.entities.contains { $0.z != 0 }
             ? diagram.entities.enumerated().sorted { $0.element.z != $1.element.z ? $0.element.z < $1.element.z : $0.offset < $1.offset }.map(\.element)
             : diagram.entities
-        for e in ordered {
+        // An entity that isn't on this diagram isn't drawn (and neither are its lines).
+        let off = Set(diagram.hidden)
+        for e in ordered where off.isEmpty || !off.contains(e.id) {
             index[e.id] = boxes.count
             boxes.append(Self.measure(e, in: diagram, pending: pendingRow == e.id, dependent: dependent.contains(e.id)))
         }
@@ -237,6 +239,14 @@ final class Scene {
             for p in l.points { rect = rect?.union(CGRect(origin: p, size: .zero)) ?? CGRect(origin: p, size: .zero) }
         }
         return rect
+    }
+
+    /// Everything the Astah export needs for the file's other diagrams: each one shown in turn, and measured.
+    static func astaOthers(of diagram: Diagram) -> [AstaExport.Other] {
+        diagram.sheets.map { sheet in
+            let view = diagram.showing(sheet.id)
+            return (view, Scene(view).astaLayout)
+        }
     }
 
     /// Where everything is drawn, for the Astah export: it keeps the same boxes and lines.

@@ -860,6 +860,8 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             }
             menu.add("Bring to Front", symbol: "square.2.stack.3d.top.filled") { store.restack(toFront: true) }
             menu.add("Send to Back", symbol: "square.2.stack.3d.bottom.filled") { store.restack(toFront: false) }
+            menu.add("New Diagram With \(many ? "These" : "It")", symbol: "rectangle.stack.badge.plus") { store.newSheet(.selection) }
+            menu.add("Take Off This Diagram", symbol: "eye.slash") { store.selectedAttribute = nil; store.takeOffDiagram() }
             menu.addItem(.separator())
             menu.add("Copy", symbol: "doc.on.doc") { store.selectedAttribute = nil; store.copySelection() }
             menu.add("Duplicate", symbol: "plus.square.on.square") { store.duplicateSelection() }

@@ -733,6 +733,37 @@ public struct Annotation: Codable, Identifiable, Equatable {
     }
 }
 
+/// One more diagram of the same model, while it isn't the one being shown: which entities are on it and where,
+/// how it is drawn, the lines you bent on it, and its own notes and shapes. The diagram being shown keeps all of
+/// this in the file's own fields (`Entity.position`, `Diagram.display`, …); switching swaps the two.
+public struct Sheet: Codable, Identifiable, Equatable {
+    public struct Placement: Codable, Equatable {
+        public var entity: UUID
+        public var position: Point
+        public var width = 0.0
+        public var level: DetailLevel?
+        public var z = 0
+    }
+    public struct Route: Codable, Equatable {
+        public var relationship: UUID
+        public var shape = LineShape.auto
+        public var waypoints: [Point] = []
+    }
+
+    public var id: UUID
+    public var name: String
+    public var display = DisplayOptions()
+    /// The entities on this diagram. One that isn't listed isn't drawn on it.
+    public var placements: [Placement] = []
+    public var routes: [Route] = []
+    public var annotations: [Annotation] = []
+
+    public init(id: UUID = UUID(), name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
 /// How the SQL is written, kept with the diagram.
 public struct SQLOptions: Codable, Equatable {
     public enum ForeignKeys: String, Codable, CaseIterable {
@@ -779,7 +810,7 @@ public struct Diagram: Codable, Equatable {
     public static let currentVersion = 2
 
     public var version = Diagram.currentVersion
-    public var entities: [Entity] = []
+    public var entities: [Entity] = [] 
     public var relationships: [Relationship] = []
     public var domains: [Domain] = []
     public var display = DisplayOptions()
@@ -793,12 +824,21 @@ public struct Diagram: Codable, Equatable {
     /// Notes, text, shapes and drawings on the canvas, the first drawn first.
     public var annotations: [Annotation] = []
     public var sql = SQLOptions()
+    /// The other diagrams of this model, in the order of their tabs, without the one being shown.
+    public var sheets: [Sheet] = []
+    /// The diagram being shown: its name, its own id, and where its tab is among all of them.
+    public var sheetName = "Diagram 1"
+    public var sheetID = UUID()
+    public var sheetIndex = 0
+    /// Entities that are in the model but not on the diagram being shown.
+    public var hidden: [UUID] = []
 
     enum CodingKeys: String, CodingKey {
         case version, entities, relationships, domains, display, dialect, entityTypes, dataTypes, defaultType, annotations, sql
+        case sheets, sheetName, sheetID, sheetIndex, hidden
     }
 
-    public init() {}
+    public init() { sheetID = Diagram.onlySheet }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -813,7 +853,16 @@ public struct Diagram: Codable, Equatable {
         defaultType = try c.decodeIfPresent(String.self, forKey: .defaultType) ?? ""
         annotations = try c.decodeIfPresent([Annotation].self, forKey: .annotations) ?? []
         sql = try c.decodeIfPresent(SQLOptions.self, forKey: .sql) ?? SQLOptions()
+        sheets = try c.decodeIfPresent([Sheet].self, forKey: .sheets) ?? []
+        sheetName = try c.decodeIfPresent(String.self, forKey: .sheetName) ?? "Diagram 1"
+        // A file with one diagram doesn't say which; any id will do, but the same one every time it is read.
+        sheetID = try c.decodeIfPresent(UUID.self, forKey: .sheetID) ?? Diagram.onlySheet
+        sheetIndex = try c.decodeIfPresent(Int.self, forKey: .sheetIndex) ?? 0
+        hidden = try c.decodeIfPresent([UUID].self, forKey: .hidden) ?? []
     }
+
+    /// The id of the diagram in a file that has only one.
+    static let onlySheet = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -829,6 +878,14 @@ public struct Diagram: Codable, Equatable {
         try a.put(annotations, .annotations, unless: [])
         // How the SQL is written is no loss in an older app: it doesn't ask for the newer version.
         if sql != SQLOptions() { try a.container.encode(sql, forKey: .sql) }
+        try a.put(sheets, .sheets, unless: [])
+        try a.put(hidden, .hidden, unless: [])
+        if !sheets.isEmpty || sheetName != "Diagram 1" {
+            a.use?.newer = true
+            try a.container.encode(sheetName, forKey: .sheetName)
+            try a.container.encode(sheetID, forKey: .sheetID)
+            try a.container.encode(sheetIndex, forKey: .sheetIndex)
+        }
         // Last, when everything inside has said whether it needs the newer version.
         try a.container.encode(a.use?.newer == false ? 1 : Diagram.currentVersion, forKey: .version)
     }
