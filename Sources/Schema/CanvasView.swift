@@ -9,6 +9,8 @@ enum EditTarget: Equatable {
     case attribute(entity: UUID, attribute: UUID)
     case newAttribute(entity: UUID)
     case relationshipName(UUID)
+    /// The text of a note, a line of text, or the label of a shape.
+    case annotation(UUID)
 }
 
 /// The diagram: an endless sheet you pan and zoom, with everything edited in place.
@@ -30,9 +32,17 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
     private enum Drag {
         case none
         case pan(last: CGPoint)
-        case move(start: CGPoint, origins: [UUID: Point], moved: Bool)
+        case move(start: CGPoint, origins: [UUID: Point], notes: [Annotation], moved: Bool)
         case marquee(start: CGPoint, current: CGPoint, base: Set<UUID>)
         case connect(from: UUID, origin: CGPoint, current: CGPoint)
+        /// Putting down a note, shape or drawing with one of the tools.
+        case sketch(kind: Annotation.Kind, points: [CGPoint])
+        /// Making an entity wider by its corner.
+        case widen(entity: UUID, start: CGFloat, width: CGFloat, moved: Bool)
+        /// A point in a line: one that is there (`index`), or a new one the first movement puts in.
+        case bend(relationship: UUID, index: Int?, start: CGPoint, moved: Bool)
+        /// A corner of a note or shape, or an end of a line.
+        case stretch(annotation: UUID, corner: Int, original: Annotation, moved: Bool)
     }
     private var drag: Drag = .none
     private var hoverEntity: UUID?
@@ -51,6 +61,7 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         setAccessibilityRole(.group)
         setAccessibilityLabel("Diagram")
         registerForDraggedTypes([.fileURL])
+        NotificationCenter.default.addObserver(forName: Grid.didChange, object: nil, queue: .main) { [weak self] _ in self?.needsDisplay = true }
         // Redraw after any change to the diagram or the selection.
         watching = store.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async {
@@ -107,6 +118,16 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
 
     /// The canvas point in the middle of the view.
     var visibleCentre: CGPoint { toCanvas(CGPoint(x: bounds.midX, y: bounds.midY)) }
+
+    /// The part of the canvas you are looking at.
+    var visibleCanvas: CGRect { CGRect(origin: toCanvas(.zero), size: CGSize(width: bounds.width / zoom, height: bounds.height / zoom)) }
+
+    /// Puts a canvas point in the middle of the view (the map does this).
+    func centre(on p: CGPoint) {
+        autoFit = false
+        offset = CGPoint(x: (bounds.midX - p.x * zoom).rounded(), y: (bounds.midY - p.y * zoom).rounded())
+        refresh()
+    }
 
     private func setZoom(_ value: CGFloat, around viewPoint: CGPoint) {
         let z = min(3, max(Self.minZoom, value))
@@ -180,11 +201,20 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         return urls.filter { ["sql", "ddl", "txt"].contains($0.pathExtension.lowercased()) }
     }
 
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { droppedSQL(sender).isEmpty ? [] : .copy }
+    private func droppedPictures(_ sender: NSDraggingInfo) -> [URL] {
+        let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        return urls.filter { ["png", "jpg", "jpeg", "gif", "tiff", "heic"].contains($0.pathExtension.lowercased()) }
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { droppedSQL(sender).isEmpty && droppedPictures(sender).isEmpty ? [] : .copy }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let url = droppedSQL(sender).first else { return false }
         let p = toCanvas(convert(sender.draggingLocation, from: nil))
+        if let picture = droppedPictures(sender).first, let data = try? Data(contentsOf: picture) {
+            store.addImage(data, at: p)
+            return true
+        }
+        guard let url = droppedSQL(sender).first else { return false }
         store.importFile(url, at: store.diagram.entities.isEmpty ? nil : p)
         return true
     }
@@ -201,6 +231,8 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         var state = RenderState()
         state.selection = store.selection
         state.selectedAttribute = store.selectedAttribute
+        state.selectedAnnotations = store.selectedAnnotations
+        if case .annotation(let id) = editTarget { state.editingAnnotation = id }
         state.hoverEntity = hoverEntity
         state.hoverLink = hoverLink
         state.interactive = true
@@ -233,15 +265,33 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             ctx.setStrokeColor(MB.nsAccentInk.withAlphaComponent(0.7).cgColor)
             ctx.setLineWidth(1 / zoom)
             ctx.stroke(rect)
+        case .sketch(let kind, let points):
+            // What you are putting down, as an outline.
+            guard let a = points.first, let b = points.last else { break }
+            ctx.setStrokeColor(MB.nsAccentInk.cgColor)
+            ctx.setLineWidth(kind == .highlighter ? 14 : 1.5 / zoom)
+            if kind == .highlighter { ctx.setStrokeColor(MB.rgb(0xFFD23F, 0.38).cgColor); ctx.setLineCap(.round); ctx.setLineJoin(.round) }
+            let rect = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(b.x - a.x), height: abs(b.y - a.y))
+            switch kind {
+            case .oval: ctx.strokeEllipse(in: rect)
+            case .line, .arrow: ctx.move(to: a); ctx.addLine(to: b); ctx.strokePath()
+            case .freehand, .highlighter:
+                ctx.move(to: a)
+                for p in points.dropFirst() { ctx.addLine(to: p) }
+                ctx.strokePath()
+            default: ctx.stroke(rect)
+            }
         default: break
         }
         ctx.restoreGState()
     }
 
-    /// Dots every 20 points; every 100 when zoomed far out.
+    /// Dots every other grid step (every 20 points as it comes); five times as far apart when zoomed far out.
     private func drawGrid() {
-        var spacing = 20 * zoom
-        if spacing < 9 { spacing = 100 * zoom }
+        guard Grid.show else { return }
+        let step = CGFloat(Grid.size) * 2
+        var spacing = step * zoom
+        if spacing < 9 { spacing = step * 5 * zoom }
         guard spacing >= 9 else { return }
         NSGraphicsContext.current?.cgContext.setFillColor(MB.nsWash(zoom < 0.6 ? 0.1 : 0.13).cgColor)
         let size: CGFloat = 1.5
@@ -271,6 +321,13 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         case addButton(EntityBox)
         case entity(EntityBox)
         case link(LinkPath)
+        /// The corner that makes the selected entity wider.
+        case grip(EntityBox)
+        /// A point you put in the selected line.
+        case waypoint(LinkPath, Int)
+        case annotation(AnnotationBox)
+        /// A corner of the selected note or shape, or an end of the selected line.
+        case corner(AnnotationBox, Int)
         case nothing
     }
 
@@ -284,10 +341,21 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         for id in candidates {
             guard let box = scene.box(id) else { continue }
             for h in box.handles where hypot(p.x - h.x, p.y - h.y) <= reach { return .handle(box, h) }
-            if id == store.selection.singleEntity, box.addButton.contains(p), store.diagram.display.level == .all { return .addButton(box) }
+            if id == store.selection.singleEntity, box.addButton.contains(p), (box.entity.level ?? store.diagram.display.level) == .all { return .addButton(box) }
+            if id == store.selection.singleEntity, store.selectedAnnotations.isEmpty, box.resizeGrip.contains(p) { return .grip(box) }
         }
+        // The squares of the one selected note, shape or line.
+        if store.selectedAnnotations.count == 1, store.selection.entityIDs.isEmpty, let id = store.selectedAnnotations.first, let a = scene.annotation(id) {
+            let squares = a.annotation.kind == .line || a.annotation.kind == .arrow ? a.points : a.annotation.kind.hasFrame ? a.corners : []
+            for (i, c) in squares.enumerated() where hypot(p.x - c.x, p.y - c.y) <= reach { return .corner(a, i) }
+        }
+        if let id = store.selection.relationship, let link = scene.link(id), link.manual {
+            for (i, w) in link.points.dropFirst().dropLast().enumerated() where hypot(p.x - w.x, p.y - w.y) <= reach { return .waypoint(link, i) }
+        }
+        if let note = scene.annotation(at: p, tolerance: 5 / zoom, background: false) { return .annotation(note) }
         if let box = scene.entity(at: p) { return .entity(box) }
         if let link = scene.link(at: p, tolerance: 6 / zoom) { return .link(link) }
+        if let shape = scene.annotation(at: p, tolerance: 5 / zoom, background: true) { return .annotation(shape) }
         return .nothing
     }
 
@@ -304,7 +372,42 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             return
         }
         let extend = event.modifierFlags.contains(.shift) || event.modifierFlags.contains(.command)
+        // A tool is picked: this click or drag puts down a note, a shape or a drawing.
+        if let kind = store.tool.kind {
+            drag = .sketch(kind: kind, points: [p])
+            return
+        }
         switch hit(p) {
+        case .grip(let box):
+            drag = .widen(entity: box.id, start: p.x, width: box.frame.width, moved: false)
+        case .waypoint(let link, let index):
+            if event.clickCount == 2 {
+                // Twice on a point takes it out again.
+                store.edit("Remove Point") { $0.update(relationship: link.id) { if $0.waypoints.indices.contains(index) { $0.waypoints.remove(at: index) } } }
+            } else {
+                drag = .bend(relationship: link.id, index: index, start: p, moved: false)
+            }
+        case .corner(let note, let corner):
+            drag = .stretch(annotation: note.id, corner: corner, original: note.annotation, moved: false)
+        case .annotation(let note):
+            var ids = store.selectedAnnotations
+            if event.clickCount == 2, note.annotation.kind.hasFrame, note.annotation.kind != .image {
+                store.selection = .none
+                store.selectedAnnotations = [note.id]
+                beginEdit(.annotation(note.id))
+                return
+            }
+            if extend {
+                if ids.contains(note.id) { ids.remove(note.id) } else { ids.insert(note.id) }
+                store.selectedAnnotations = ids
+                return
+            }
+            if !ids.contains(note.id) {
+                if store.selection != .none { store.selection = .none }
+                ids = [note.id]
+                store.selectedAnnotations = ids
+            }
+            drag = .move(start: p, origins: origins(of: store.selection.entityIDs), notes: store.diagram.annotations.filter { ids.contains($0.id) }, moved: false)
         case .handle(let box, let origin):
             drag = .connect(from: box.id, origin: origin, current: p)
             NSCursor.crosshair.set()
@@ -325,22 +428,23 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
                 store.selection = ids.isEmpty ? .none : .entities(ids)
                 return
             }
-            if !ids.contains(box.id) { ids = [box.id]; store.selection = .entities(ids) }
+            if !ids.contains(box.id) { ids = [box.id]; store.selectedAnnotations = []; store.selection = .entities(ids) }
             // A click on a line of the one selected entity selects that line.
             if ids.count == 1 { store.selectedAttribute = row?.id }
-            var origins: [UUID: Point] = [:]
-            for id in ids { if let e = store.diagram.entity(id) { origins[id] = e.position } }
-            drag = .move(start: p, origins: origins, moved: false)
+            let notes = store.selectedAnnotations
+            drag = .move(start: p, origins: origins(of: ids), notes: store.diagram.annotations.filter { notes.contains($0.id) }, moved: false)
         case .link(let link):
             store.selection = .relationship(link.id)
-            if event.clickCount == 2 { beginEdit(.relationshipName(link.id)) }
+            if event.clickCount == 2 { beginEdit(.relationshipName(link.id)); return }
+            // Dragging a line puts a point in it there, to bend it your way.
+            if link.relationship.parent != link.relationship.child { drag = .bend(relationship: link.id, index: nil, start: p, moved: false) }
         case .nothing:
             if event.clickCount == 2 {
                 store.newEntity(at: CGPoint(x: p.x - 85, y: p.y - 16))
                 return
             }
-            if !extend { store.selection = .none }
-            drag = .marquee(start: p, current: p, base: extend ? store.selection.entityIDs : [])
+            if !extend { store.selection = .none; store.selectedAnnotations = [] }
+            drag = .marquee(start: p, current: p, base: extend ? store.selection.entityIDs.union(store.selectedAnnotations) : [])
         }
         needsDisplay = true
     }
@@ -355,28 +459,104 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             offset.y += v.y - last.y
             drag = .pan(last: v)
             refresh()
-        case .move(let start, let origins, let moved):
+        case .move(let start, let origins, let notes, let moved):
             let dx = p.x - start.x, dy = p.y - start.y
             if !moved {
                 guard hypot(dx, dy) * zoom > 3 else { return }
                 store.beginGesture()
             }
-            // Positions snap to the 10-point grid; hold ⌘ to place freely.
+            // Positions land on the grid; hold ⌘ to place freely.
             let free = event.modifierFlags.contains(.command)
+            // Notes and shapes move by the same whole steps as the entities, so a group keeps its shape.
+            let step = (Grid.snap(Double(dx), free: free), Grid.snap(Double(dy), free: free))
             store.gestureEdit { d in
                 for (id, o) in origins {
                     let x = o.x + Double(dx), y = o.y + Double(dy)
-                    d.update(entity: id) { $0.position = free ? Point(x.rounded(), y.rounded()) : Point((x / 10).rounded() * 10, (y / 10).rounded() * 10) }
+                    d.update(entity: id) { $0.position = Point(Grid.snap(x, free: free), Grid.snap(y, free: free)) }
+                }
+                for note in notes {
+                    d.update(annotation: note.id) { $0 = note; $0.move(by: step.0, step.1) }
                 }
             }
-            drag = .move(start: start, origins: origins, moved: true)
+            drag = .move(start: start, origins: origins, notes: notes, moved: true)
         case .marquee(let start, _, let base):
             drag = .marquee(start: start, current: p, base: base)
             let rect = CGRect(x: min(start.x, p.x), y: min(start.y, p.y), width: abs(p.x - start.x), height: abs(p.y - start.y))
-            let inside = Set(store.scene.boxes.filter { $0.frame.intersects(rect) }.map(\.id)).union(base)
+            let scene = store.scene
+            let inside = Set(scene.boxes.filter { $0.frame.intersects(rect) }.map(\.id)).union(base.filter { scene.box($0) != nil })
+            let notes = Set(scene.annotations.filter { $0.frame.intersects(rect) }.map(\.id)).union(base.filter { scene.annotation($0) != nil })
             let next: Selection = inside.isEmpty ? .none : .entities(inside)
             if next != store.selection { store.selection = next }
+            if notes != store.selectedAnnotations { store.selectedAnnotations = notes }
             needsDisplay = true
+        case .sketch(let kind, var points):
+            // A drawing keeps every point; a shape only where it started and where the pointer is.
+            if kind == .freehand || kind == .highlighter {
+                if let last = points.last, hypot(p.x - last.x, p.y - last.y) * zoom >= 2 { points.append(p) }
+            } else {
+                points = [points[0], p]
+            }
+            drag = .sketch(kind: kind, points: points)
+            needsDisplay = true
+        case .widen(let entity, let start, let width, let moved):
+            if !moved {
+                guard abs(p.x - start) * zoom > 3 else { return }
+                store.beginGesture()
+            }
+            let wide = max(120, Grid.snap(Double(width + p.x - start), free: event.modifierFlags.contains(.command)))
+            store.gestureEdit { $0.update(entity: entity) { $0.width = wide } }
+            drag = .widen(entity: entity, start: start, width: width, moved: true)
+        case .bend(let relationship, var index, let start, let moved):
+            if !moved {
+                guard hypot(p.x - start.x, p.y - start.y) * zoom > 3 else { return }
+                store.beginGesture()
+                if index == nil, let link = store.scene.link(relationship) {
+                    // A new point, in the stretch of the line that was taken hold of.
+                    var best = 0, distance = CGFloat.greatestFiniteMagnitude
+                    for (i, (a, b)) in zip(link.points, link.points.dropFirst()).enumerated() {
+                        let dx = b.x - a.x, dy = b.y - a.y, length = dx * dx + dy * dy
+                        let t = length == 0 ? 0 : max(0, min(1, ((start.x - a.x) * dx + (start.y - a.y) * dy) / length))
+                        let d = hypot(start.x - (a.x + t * dx), start.y - (a.y + t * dy))
+                        if d < distance { distance = d; best = i }
+                    }
+                    // A line the app laid out keeps its corners as points, so only the stretch you pull moves.
+                    let corners = link.manual ? [] : link.points.dropFirst().dropLast().map { Point(Double($0.x), Double($0.y)) }
+                    store.gestureEdit { d in
+                        d.update(relationship: relationship) { r in
+                            if !link.manual { r.waypoints = corners }
+                            r.waypoints.insert(Point(Double(start.x), Double(start.y)), at: min(best, r.waypoints.count))
+                        }
+                    }
+                    index = min(best, (store.diagram.relationship(relationship)?.waypoints.count ?? 1) - 1)
+                }
+            }
+            guard let i = index else { return }
+            let free = event.modifierFlags.contains(.command)
+            store.gestureEdit { d in
+                d.update(relationship: relationship) { r in
+                    if r.waypoints.indices.contains(i) { r.waypoints[i] = Point(Grid.snap(Double(p.x), free: free), Grid.snap(Double(p.y), free: free)) }
+                }
+            }
+            drag = .bend(relationship: relationship, index: i, start: start, moved: true)
+        case .stretch(let id, let corner, let original, let moved):
+            if !moved { store.beginGesture() }
+            let free = event.modifierFlags.contains(.command)
+            let x = Grid.snap(Double(p.x), free: free), y = Grid.snap(Double(p.y), free: free)
+            store.gestureEdit { d in
+                d.update(annotation: id) { a in
+                    if original.kind == .line || original.kind == .arrow {
+                        if a.points.indices.contains(corner) { a.points[corner] = Point(x, y) }
+                        return
+                    }
+                    // The corner opposite the one you hold stays where it is.
+                    let left = corner == 0 || corner == 3, top = corner == 0 || corner == 1
+                    let fixedX = left ? original.x + original.width : original.x, fixedY = top ? original.y + original.height : original.y
+                    a.width = max(20, abs(x - fixedX)); a.height = max(16, abs(y - fixedY))
+                    a.x = left ? fixedX - a.width : fixedX
+                    a.y = top ? fixedY - a.height : fixedY
+                }
+            }
+            drag = .stretch(annotation: id, corner: corner, original: original, moved: true)
         case .connect(let from, let origin, _):
             drag = .connect(from: from, origin: origin, current: p)
             needsDisplay = true
@@ -389,8 +569,16 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         let ended = drag
         drag = .none
         switch ended {
-        case .move(_, _, let moved):
-            if moved { store.endGesture(store.selection.entityIDs.count == 1 ? "Move Entity" : "Move Entities") }
+        case .move(_, _, let notes, let moved):
+            if moved { store.endGesture(store.selection.entityIDs.count == 1 && notes.isEmpty ? "Move Entity" : store.selection.entityIDs.isEmpty ? "Move" : "Move Entities") }
+        case .widen(_, _, _, let moved):
+            if moved { store.endGesture("Change Width") }
+        case .bend(_, _, _, let moved):
+            if moved { store.endGesture("Bend Line") }
+        case .stretch(_, _, _, let moved):
+            if moved { store.endGesture("Resize") }
+        case .sketch(let kind, let points):
+            finishSketch(kind, points)
         case .connect(let from, let origin, _):
             if let target = store.scene.entity(at: p) {
                 if target.id != from { store.connect(parent: from, child: target.id) }
@@ -405,6 +593,36 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         }
         updateHover(point(event))
         needsDisplay = true
+    }
+
+    private func origins(of ids: Set<UUID>) -> [UUID: Point] {
+        var out: [UUID: Point] = [:]
+        for id in ids { if let e = store.diagram.entity(id) { out[id] = e.position } }
+        return out
+    }
+
+    /// What a tool leaves behind when you let go: a note or text where you clicked, a shape as large as you
+    /// dragged it, a line between where you started and stopped, or the drawing itself.
+    private func finishSketch(_ kind: Annotation.Kind, _ points: [CGPoint]) {
+        guard let a = points.first, let b = points.last else { return }
+        let tool = store.tool
+        store.tool = .pointer
+        let dragged = hypot(b.x - a.x, b.y - a.y) * zoom > 6
+        var made: Annotation
+        switch kind {
+        case .line, .arrow:
+            guard dragged else { return }
+            made = Annotation(kind: kind, points: [a, b].map { Point(Grid.snap(Double($0.x)), Grid.snap(Double($0.y))) })
+        case .freehand, .highlighter:
+            guard points.count > 2 else { return }
+            made = Annotation(kind: kind, points: points.map { Point(Double(($0.x * 2).rounded() / 2), Double(($0.y * 2).rounded() / 2)) })
+        default:
+            let size: (Double, Double) = kind == .note ? (180, 70) : kind == .text ? (170, 24) : (240, 160)
+            let x = Grid.snap(Double(min(a.x, b.x))), y = Grid.snap(Double(min(a.y, b.y)))
+            made = Annotation(kind: kind, x: x, y: y, width: dragged ? max(20, Grid.snap(Double(abs(b.x - a.x)))) : size.0, height: dragged ? max(16, Grid.snap(Double(abs(b.y - a.y)))) : size.1)
+        }
+        let id = store.add(made, name: "Add \(tool.title)")
+        if kind == .note || kind == .text { beginEdit(.annotation(id)) }
     }
 
     override func otherMouseDown(with event: NSEvent) {
@@ -441,8 +659,15 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             needsDisplay = true
         }
         if spaceDown { NSCursor.openHand.set() }
-        else if case .handle = hit(p) { NSCursor.crosshair.set() }
-        else { NSCursor.arrow.set() }
+        else if store.tool != .pointer { NSCursor.crosshair.set() }
+        else {
+            switch hit(p) {
+            case .handle: NSCursor.crosshair.set()
+            case .grip: NSCursor.resizeLeftRight.set()
+            case .corner, .waypoint: NSCursor.crosshair.set()
+            default: NSCursor.arrow.set()
+            }
+        }
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -477,7 +702,10 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         case 51, 117:   // delete
             if store.canDelete { store.deleteSelection() } else { NSSound.beep() }
         case 36, 76:    // return: add a line, or retype the selected one
-            if let e = single {
+            if store.selection.entityIDs.isEmpty, store.selectedAnnotations.count == 1, let id = store.selectedAnnotations.first,
+               let a = store.diagram.annotation(id), a.kind.hasFrame, a.kind != .image {
+                beginEdit(.annotation(id))
+            } else if let e = single {
                 if let a = store.selectedAttribute { beginEdit(.attribute(entity: e, attribute: a)) } else { beginEdit(.newAttribute(entity: e)) }
             } else if let r = store.selection.relationship {
                 beginEdit(.relationshipName(r))
@@ -485,7 +713,8 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         case 120:       // F2: rename
             if let e = single { beginEdit(.entityName(e)) }
         case 53:        // esc
-            if case .none = drag { store.selection = .none } else { drag = .none; needsDisplay = true }
+            if store.tool != .pointer { store.tool = .pointer; drag = .none; needsDisplay = true }
+            else if case .none = drag { store.selection = .none; store.selectedAnnotations = [] } else { drag = .none; needsDisplay = true }
         case 49:        // space: hold to pan
             if !event.isARepeat { spaceDown = true; NSCursor.openHand.set() }
         case 123, 124, 125, 126:
@@ -498,10 +727,11 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
                 else if let list = store.diagram.entity(e)?.attributes, let i = list.firstIndex(where: { $0.id == a }), list.indices.contains(i + (dy > 0 ? 1 : -1)) {
                     store.selectedAttribute = list[i + (dy > 0 ? 1 : -1)].id
                 }
-            } else if !store.selection.entityIDs.isEmpty {
-                let ids = store.selection.entityIDs
+            } else if !store.selection.entityIDs.isEmpty || !store.selectedAnnotations.isEmpty {
+                let ids = store.selection.entityIDs, notes = store.selectedAnnotations
                 store.edit("Move", coalesce: "nudge") { d in
                     for id in ids { d.update(entity: id) { $0.position = Point($0.position.x + dx, $0.position.y + dy) } }
+                    for id in notes { d.update(annotation: id) { $0.move(by: dx, dy) } }
                 }
             } else {
                 autoFit = false
@@ -541,7 +771,7 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
-        case #selector(copy(_:)), #selector(cut(_:)): !store.selection.entityIDs.isEmpty
+        case #selector(copy(_:)), #selector(cut(_:)): !store.selection.entityIDs.isEmpty || !store.selectedAnnotations.isEmpty
         case #selector(paste(_:)): store.canPaste
         case #selector(delete(_:)): store.canDelete
         default: true
@@ -572,6 +802,8 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
                 }
                 menu.add("Move Up") { store.moveAttribute(a.id, in: box.id, by: -1) }
                 menu.add("Move Down") { store.moveAttribute(a.id, in: box.id, by: 1) }
+                menu.add("Hide on the Diagram") { store.edit("Hide Attribute") { $0.update(attribute: a.id, in: box.id) { $0.hidden = true } } }
+                menu.add("Add a Note About It", symbol: "note.text") { store.newNote(about: box.id, attribute: a.id) }
                 if let fk = a.foreignKey {
                     menu.add("Show Its Relationship") { store.selection = .relationship(fk.relationship) }
                 } else {
@@ -583,6 +815,21 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
                 menu.add("Add Attribute", symbol: "plus") { [weak self] in self?.beginEdit(.newAttribute(entity: box.id)) }
                 menu.add("Rename", symbol: "pencil") { [weak self] in self?.beginEdit(.entityName(box.id)) }
                 menu.add("Relate to Itself", symbol: "arrow.triangle.2.circlepath") { store.connect(parent: box.id, child: box.id) }
+                menu.add("Add a Note About It", symbol: "note.text") { store.newNote(about: box.id) }
+                menu.addSubmenu("Show", symbol: "eye") { sub in
+                    let level = box.entity.level
+                    let set: (DetailLevel?) -> () -> Void = { v in { store.edit("Change Detail") { $0.update(entity: box.id) { $0.level = v } } } }
+                    sub.add("As the Rest of the Diagram", checked: level == nil, set(nil))
+                    sub.add("Everything", checked: level == .all, set(.all))
+                    sub.add("Keys Only", checked: level == .keys, set(.keys))
+                    sub.add("Its Name Only", checked: level == .namesOnly, set(.namesOnly))
+                    if box.entity.attributes.contains(where: \.hidden) {
+                        sub.addItem(.separator())
+                        sub.add("Its Hidden Attributes Again") {
+                            store.edit("Show Attributes") { $0.update(entity: box.id) { e in for i in e.attributes.indices { e.attributes[i].hidden = false } } }
+                        }
+                    }
+                }
             }
             menu.addSubmenu("Colour", symbol: "paintpalette") { sub in
                 for c in EntityColor.allCases {
@@ -607,7 +854,10 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
                     sub.add("Spread Down") { store.align(.spreadDown) }
                 }
                 menu.add("Tidy Up Selection", symbol: "wand.and.stars") { store.tidyUp() }
+                menu.add("Make the Same Width", symbol: "arrow.left.and.right") { store.sameWidth() }
             }
+            menu.add("Bring to Front", symbol: "square.2.stack.3d.top.filled") { store.restack(toFront: true) }
+            menu.add("Send to Back", symbol: "square.2.stack.3d.bottom.filled") { store.restack(toFront: false) }
             menu.addItem(.separator())
             menu.add("Copy", symbol: "doc.on.doc") { store.selectedAttribute = nil; store.copySelection() }
             menu.add("Duplicate", symbol: "plus.square.on.square") { store.duplicateSelection() }
@@ -648,10 +898,61 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
                 }
             }
             menu.add("Name…", symbol: "pencil") { [weak self] in self?.beginEdit(.relationshipName(r.id)) }
+            menu.addSubmenu("Line", symbol: "point.topleft.down.to.point.bottomright.curvepath") { sub in
+                sub.add("Square Corners", checked: r.shape == .auto, set("Change Line") { $0.shape = .auto })
+                sub.add("Straight", checked: r.shape == .straight, set("Change Line") { $0.shape = .straight; $0.waypoints = [] })
+                sub.add("Curved", checked: r.shape == .curved, set("Change Line") { $0.shape = .curved })
+                sub.addItem(.separator())
+                sub.add("Show Its Name", checked: !r.hideName, set("Change Line") { $0.hideName.toggle() })
+                sub.add("Show How Many", checked: !r.hideCardinality, set("Change Line") { $0.hideCardinality.toggle() })
+                sub.addItem(.separator())
+                sub.add("Let the App Find the Way Again", enabled: !r.waypoints.isEmpty, set("Reroute Line") { $0.waypoints = [] })
+            }
             menu.addItem(.separator())
             menu.add("Delete Relationship", symbol: "trash") { store.deleteSelection() }
+        case .annotation(let note), .corner(let note, _):
+            if !store.selectedAnnotations.contains(note.id) {
+                store.selection = .none
+                store.selectedAnnotations = [note.id]
+            }
+            let a = note.annotation
+            if a.kind.hasFrame, a.kind != .image {
+                menu.add(a.kind == .note || a.kind == .text ? "Edit Text" : "Label…", symbol: "pencil") { [weak self] in self?.beginEdit(.annotation(a.id)) }
+            }
+            menu.addSubmenu("Colour", symbol: "paintpalette") { sub in
+                sub.add("The Usual", checked: a.style.isPlain) {
+                    let ids = store.selectedAnnotations
+                    store.edit("Change Colour") { d in for id in ids { d.update(annotation: id) { $0.style = Style() } } }
+                }
+                for c in EntityColor.allCases where c != .none {
+                    let hex = AstaExport.fill(c) ?? ""
+                    let item = sub.add(c.title, checked: a.style.fill == hex || a.style.line == hex) {
+                        let ids = store.selectedAnnotations
+                        store.edit("Change Colour") { d in
+                            for id in ids { d.update(annotation: id) { n in if n.kind.hasFrame && n.kind != .text { n.style.fill = hex } else { n.style.line = c.nsColor?.hex ?? hex } } }
+                        }
+                    }
+                    item.image = Self.swatch(c)
+                }
+            }
+            if a.kind == .note, a.entity != nil {
+                menu.add("No Longer About an Entity") { store.edit("Change Note") { $0.update(annotation: a.id) { $0.entity = nil; $0.attribute = nil } } }
+            }
+            menu.add("Bring to Front", symbol: "square.2.stack.3d.top.filled") { store.restack(toFront: true) }
+            menu.add("Send to Back", symbol: "square.2.stack.3d.bottom.filled") { store.restack(toFront: false) }
+            menu.addItem(.separator())
+            menu.add("Copy", symbol: "doc.on.doc") { store.copySelection() }
+            menu.add("Duplicate", symbol: "plus.square.on.square") { store.duplicateSelection() }
+            menu.add("Delete", symbol: "trash") { store.deleteSelection() }
+        case .grip(let box):
+            menu.add("Back to Its Own Width", enabled: box.entity.width > 0) { store.edit("Change Width") { $0.update(entity: box.id) { $0.width = 0 } } }
+        case .waypoint(let link, let index):
+            menu.add("Remove This Point") { store.edit("Remove Point") { $0.update(relationship: link.id) { if $0.waypoints.indices.contains(index) { $0.waypoints.remove(at: index) } } } }
+            menu.add("Let the App Find the Way Again") { store.edit("Reroute Line") { $0.update(relationship: link.id) { $0.waypoints = [] } } }
         case .nothing:
             menu.add("New Entity Here", symbol: "plus.rectangle") { store.newEntity(at: CGPoint(x: p.x - 85, y: p.y - 16)) }
+            menu.add("New Note Here", symbol: "note.text") { store.newNote(.note, at: p) }
+            menu.add("New Text Here", symbol: "textformat") { store.newNote(.text, at: p) }
             menu.add("Paste Here", symbol: "doc.on.clipboard", enabled: store.canPaste) { store.paste(at: p) }
             menu.addItem(.separator())
             menu.add("Select All", enabled: !store.diagram.entities.isEmpty) { store.selectAll() }
@@ -706,6 +1007,14 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             placeholder = "verb, e.g. places"
             font = Metrics.labelFont
             background = MB.nsCanvas
+        case .annotation(let id):
+            guard let a = store.diagram.annotation(id) else { return }
+            if store.selection != .none { store.selection = .none }
+            store.selectedAnnotations = [id]
+            text = a.text
+            placeholder = a.kind == .note ? "Note" : a.kind == .text ? "Text" : "Label"
+            font = Renderer.font(for: a)
+            background = a.kind == .note ? (NSColor(hex: a.style.fill) ?? Renderer.noteFill) : MB.nsCanvas
         }
         let field = NSTextField(string: text)
         field.isBordered = false
@@ -717,9 +1026,18 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         field.font = font
         field.placeholderString = placeholder
         field.delegate = self
-        field.cell?.usesSingleLineMode = true
-        field.cell?.isScrollable = true
-        field.cell?.lineBreakMode = .byClipping
+        if case .annotation(let id) = target, store.diagram.annotation(id)?.kind != .rectangle, store.diagram.annotation(id)?.kind != .oval {
+            // A note takes several lines: it wraps, and ⌥↩ starts a new line.
+            field.cell?.usesSingleLineMode = false
+            field.cell?.wraps = true
+            field.cell?.isScrollable = false
+            field.cell?.lineBreakMode = .byWordWrapping
+            field.maximumNumberOfLines = 0
+        } else {
+            field.cell?.usesSingleLineMode = true
+            field.cell?.isScrollable = true
+            field.cell?.lineBreakMode = .byClipping
+        }
         if case .relationshipName = target { field.alignment = .center }
         field.setAccessibilityLabel(placeholder)
         addSubview(field)
@@ -735,7 +1053,7 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
     private func reveal(for target: EditTarget) {
         switch target {
         case .entityName(let id), .attribute(let id, _), .newAttribute(let id): reveal(id)
-        case .relationshipName: break
+        case .relationshipName, .annotation: break
         }
     }
 
@@ -756,6 +1074,13 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             guard let link = scene.link(id) else { return nil }
             let c = Renderer.label(for: link).map { CGPoint(x: $0.rect.midX, y: $0.rect.midY) } ?? link.labelCenter
             return CGRect(x: c.x - 80, y: c.y - 11, width: 160, height: 22)
+        case .annotation(let id):
+            guard let note = scene.annotation(id) else { return nil }
+            switch note.annotation.kind {
+            case .note: return note.frame.insetBy(dx: 6, dy: 4)
+            case .rectangle, .oval: return CGRect(x: note.frame.minX + 6, y: note.frame.minY + 4, width: max(60, note.frame.width - 12), height: 20)
+            default: return note.frame
+            }
         }
     }
 
@@ -763,15 +1088,21 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
     private func layoutEditor() {
         guard let field = editor, let target = editTarget else { return }
         guard let rect = editRect(target) else { cancelEdit(); return }
-        let base: NSFont
+        var base: NSFont
         switch target {
         case .entityName: base = Metrics.nameFont
         case .relationshipName: base = Metrics.labelFont
+        case .annotation(let id): base = store.diagram.annotation(id).map(Renderer.font(for:)) ?? Renderer.noteFont
         default: base = Metrics.rowFont
         }
         let font = NSFont.systemFont(ofSize: base.pointSize * zoom, weight: base == Metrics.nameFont ? .semibold : .regular)
         if field.font != font { field.font = font }
         let v = toView(rect)
+        // A note's text fills the note; everything else is one line, centred on its row.
+        if case .annotation(let id) = target, let kind = store.diagram.annotation(id)?.kind, kind == .note || kind == .text {
+            if field.frame != v { field.frame = v }
+            return
+        }
         let height = ceil(font.ascender - font.descender + font.leading) + 2
         let frame = CGRect(x: v.minX, y: (v.midY - height / 2).rounded(), width: v.width, height: height)
         if field.frame != frame { field.frame = frame }
@@ -782,6 +1113,10 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)):
             commitEdit(advance: true)
             return true
+        case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+            // ⌥↩ in a note: a new line.
+            if case .annotation = editTarget { textView.insertNewlineIgnoringFieldEditor(nil); return true }
+            return false
         case #selector(NSResponder.cancelOperation(_:)):
             cancelEdit()
             return true
@@ -827,6 +1162,26 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
         let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         removeEditor()
         switch target {
+        case .annotation(let id):
+            guard let a = store.diagram.annotation(id) else { return }
+            // A note or text left empty right after it was made is taken away again.
+            if text.isEmpty, a.text.isEmpty, a.kind == .note || a.kind == .text {
+                store.edit("Remove") { $0.annotations.removeAll { $0.id == id } }
+                return
+            }
+            if text != a.text {
+                store.edit("Change Text") { d in
+                    d.update(annotation: id) { n in
+                        n.text = text
+                        // It grows to hold what was typed.
+                        if n.kind == .note || n.kind == .text {
+                            let inset: CGFloat = n.kind == .note ? 16 : 4
+                            let needed = Double(Renderer.height(of: text, width: CGFloat(n.width) - inset, font: Renderer.font(for: n))) + (n.kind == .note ? 14 : 6)
+                            if needed > n.height { n.height = needed }
+                        }
+                    }
+                }
+            }
         case .entityName(let id):
             if !text.isEmpty, text != store.diagram.entity(id)?.name {
                 store.edit("Rename Entity") { $0.update(entity: id) { $0.name = text; $0.physicalName = "" } }

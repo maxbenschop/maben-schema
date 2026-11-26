@@ -12,6 +12,10 @@ releases as the GitHub release notes, and schema.maben.gg/changelog is built fro
 - Domains can have a default, be required, and sit under another domain; Add Several Domains takes one per line
 - Data types of your own, and the type an attribute gets when you type none
 - Other names, tags and links on entities, attributes and domains; groups in the entity list
+- Notes (about an entity or an attribute), text, rectangles, ovals, lines, arrows, drawings by hand, a highlighter and pictures on the canvas, from the tool strip at its top
+- An entity's own colours and width, more or less detail per entity, single attributes hidden; Copy Colours and Paste Colours; Bring to Front and Send to Back
+- Lines your way: drag a line to bend it through points of your own, make it straight or curved, give it a colour, hide its name or count, and let lines hop over each other where they cross
+- A map of the whole diagram, Find and Replace across all names, and a grid you can hide, resize or switch off
 - Export for Astah (File menu, and ⌘K): an `.asta` file that Astah Professional opens with the same entities, attributes, keys, types, domains and relationships, in the same places and with the same lines, in the notation that was showing
 
 ## 0.1 · 20 November 2026

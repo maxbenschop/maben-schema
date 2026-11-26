@@ -220,6 +220,70 @@ enum SelfTest {
         canvas.commitEdit(advance: false)
         check(store.diagram.entities[2].attributes.map(\.name) == ["book_id"], "the new entity already has the foreign key")
 
+        // Tools: drag out a rectangle, click down a note and type in it.
+        let before2 = store.diagram.annotations.count
+        store.tool = .rectangle
+        drag(from: CGPoint(x: 100, y: 760), to: CGPoint(x: 320, y: 880))
+        check(store.diagram.annotations.count == before2 + 1 && store.diagram.annotations.last?.kind == .rectangle, "the rectangle tool drags out a rectangle")
+        check(store.tool == .pointer, "and hands back to the pointer")
+        check(store.diagram.annotations.last.map { $0.width == 220 && $0.height == 120 } == true, "as large as it was dragged, on the grid")
+        store.tool = .note
+        click(CGPoint(x: 400, y: 760))
+        if case .annotation = canvas.editTarget { check(true, "the note tool puts down a note, ready to type in") } else { check(false, "the note tool puts down a note, ready to type in") }
+        canvas.typeIntoEditor("Ask the librarian")
+        canvas.commitEdit(advance: false)
+        let note = store.diagram.annotations.last!
+        check(note.kind == .note && note.text == "Ask the librarian", "what was typed is the note's text")
+        check(store.selectedAnnotations == [note.id] && store.selection == .none, "the new note is what is selected")
+        // An empty note doesn't stay.
+        store.tool = .note
+        click(CGPoint(x: 400, y: 900))
+        canvas.commitEdit(advance: false)
+        check(store.diagram.annotations.count == before2 + 2, "a note left empty is taken away again")
+
+        // Drag the note; drag a corner of it; a drag across the sheet takes notes and entities together.
+        let noteBox = store.scene.annotation(note.id)!
+        click(CGPoint(x: 100, y: 1000))
+        drag(from: CGPoint(x: noteBox.frame.midX, y: noteBox.frame.midY), to: CGPoint(x: noteBox.frame.midX + 50, y: noteBox.frame.midY + 30))
+        check(store.diagram.annotation(note.id).map { $0.x == note.x + 50 && $0.y == note.y + 30 } == true, "a note can be dragged")
+        let moved = store.scene.annotation(note.id)!
+        drag(from: moved.corners[2], to: CGPoint(x: moved.corners[2].x + 40, y: moved.corners[2].y + 20))
+        check(store.diagram.annotation(note.id).map { $0.width == note.width + 40 && $0.height == note.height + 20 } == true, "dragging a corner resizes it")
+        drag(from: CGPoint(x: 60, y: 120), to: CGPoint(x: 1000, y: 1000))
+        check(store.selection.entityIDs.count == 3 && store.selectedAnnotations.count == 2, "dragging over the sheet selects entities, notes and shapes together")
+        store.duplicateSelection()
+        check(store.diagram.entities.count == 6 && store.diagram.annotations.count == before2 + 4, "and they are duplicated together")
+        store.undoManager?.undo()
+        click(CGPoint(x: 60, y: 60))
+
+        // Make an entity wider by its corner.
+        click(CGPoint(x: store.scene.box(author)!.frame.midX, y: store.scene.box(author)!.frame.minY + 14))
+        let grip = store.scene.box(author)!.resizeGrip
+        let wide = store.scene.box(author)!.frame.width
+        drag(from: CGPoint(x: grip.midX, y: grip.midY), to: CGPoint(x: grip.midX + 80, y: grip.midY))
+        check(store.scene.box(author)!.frame.width == wide + 80, "dragging an entity's corner makes it wider (\(store.scene.box(author)!.frame.width - wide))")
+
+        // Drag a line: a point is put in it there, and the line goes through it.
+        let straight = store.scene.links[0]
+        click(straight.labelCenter)
+        drag(from: straight.labelCenter, to: CGPoint(x: straight.labelCenter.x, y: straight.labelCenter.y - 80))
+        let bent = store.diagram.relationship(straight.id)!
+        check(!bent.waypoints.isEmpty && store.scene.link(straight.id)?.manual == true, "dragging a line bends it there")
+        store.undoManager?.undo()
+        check(store.diagram.relationship(straight.id)!.waypoints.isEmpty, "and one undo straightens it again")
+
+        // Find and replace, on top and underneath.
+        var swap = DiagramStore.Replacement()
+        swap.find = "author"; swap.with = "Writer"
+        check(store.replace(swap, apply: false) == 1, "find counts the names that hold the text")
+        store.replace(swap, apply: true)
+        check(store.diagram.entity(author)?.name == "Writer" && store.diagram.entity(book)!.attributes.map(\.name).contains("writer_id"), "replace renames, and the foreign key follows")
+        store.selection = .entities([author])
+        store.restack(toFront: false)
+        check(store.scene.boxes.first?.id == author && store.diagram.entities.first?.id == author, "send to back draws it first")
+        store.restack(toFront: true)
+        check(store.scene.boxes.last?.id == author, "bring to front draws it last")
+
         // Right-click menus exist for an entity, a line and the sheet.
         func menuTitles(_ p: CGPoint) -> [String] {
             canvas.menu(for: event(.rightMouseDown, p))?.items.map(\.title) ?? []
@@ -227,7 +291,9 @@ enum SelfTest {
         let bookBox = store.scene.box(book)!
         check(menuTitles(CGPoint(x: bookBox.frame.midX, y: bookBox.frame.minY + 14)).contains("Add Attribute"), "right-click on an entity offers Add Attribute")
         check(menuTitles(store.scene.links[0].labelCenter).contains("Swap Parent and Child"), "right-click on a line offers Swap Parent and Child")
-        check(menuTitles(CGPoint(x: 100, y: 700)).contains("New Entity Here"), "right-click on the sheet offers New Entity Here")
+        check(menuTitles(CGPoint(x: 60, y: 700)).contains("New Note Here"), "right-click on the sheet offers New Entity Here and New Note Here")
+        let noteNow = store.scene.annotation(note.id)!
+        check(menuTitles(CGPoint(x: noteNow.frame.midX, y: noteNow.frame.midY)).contains("Edit Text"), "right-click on a note offers Edit Text")
     }
 
     /// `--bench`: how long the things you'd feel take, on a diagram far larger than most.

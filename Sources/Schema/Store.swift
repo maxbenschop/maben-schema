@@ -25,14 +25,69 @@ enum Selection: Equatable {
 
 enum Alignment { case left, centre, right, top, middle, bottom, spreadAcross, spreadDown }
 
+/// What the pointer does on the canvas: select and move, or put down one note, shape or drawing.
+enum Tool: String, CaseIterable {
+    case pointer, note, text, rectangle, oval, line, arrow, pen, highlighter
+
+    var kind: Annotation.Kind? {
+        switch self {
+        case .pointer: nil
+        case .note: .note
+        case .text: .text
+        case .rectangle: .rectangle
+        case .oval: .oval
+        case .line: .line
+        case .arrow: .arrow
+        case .pen: .freehand
+        case .highlighter: .highlighter
+        }
+    }
+    var title: String {
+        switch self {
+        case .pointer: "Select and move"
+        case .note: "Note"
+        case .text: "Text"
+        case .rectangle: "Rectangle"
+        case .oval: "Oval"
+        case .line: "Line"
+        case .arrow: "Arrow"
+        case .pen: "Draw by hand"
+        case .highlighter: "Highlighter"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .pointer: "cursorarrow"
+        case .note: "note.text"
+        case .text: "textformat"
+        case .rectangle: "rectangle"
+        case .oval: "circle"
+        case .line: "line.diagonal"
+        case .arrow: "arrow.up.right"
+        case .pen: "scribble"
+        case .highlighter: "highlighter"
+        }
+    }
+}
+
 /// One open diagram: the model, what's selected, and every change you can make to it. Each change goes
 /// through `edit`, which keeps the foreign keys right and makes it undoable.
 @MainActor
 final class DiagramStore: ObservableObject {
     @Published private(set) var diagram: Diagram
     @Published var selection: Selection = .none {
-        didSet { if selection != oldValue { selectedAttribute = nil } }
+        didSet {
+            if selection != oldValue { selectedAttribute = nil }
+            // Notes and shapes are selected along with entities, not with a relationship or a domain.
+            switch selection {
+            case .relationship, .domain: if !selectedAnnotations.isEmpty { selectedAnnotations = [] }
+            default: break
+            }
+        }
     }
+    /// The selected notes, text, shapes and drawings. They can be selected together with entities.
+    @Published var selectedAnnotations: Set<UUID> = []
+    @Published var tool: Tool = .pointer
     /// A line inside the one selected entity.
     @Published var selectedAttribute: UUID?
     @Published var zoom: CGFloat = 1
@@ -47,7 +102,7 @@ final class DiagramStore: ObservableObject {
     /// The attribute whose extra fields are open in the inspector.
     @Published var expandedAttribute: UUID?
 
-    enum Sheet: String, Identifiable { case importSQL, addDomains; var id: String { rawValue } }
+    enum Sheet: String, Identifiable { case importSQL, addDomains, replace; var id: String { rawValue } }
 
     weak var undoManager: UndoManager?
     weak var canvas: CanvasView?
@@ -139,6 +194,10 @@ final class DiagramStore: ObservableObject {
     }
 
     private func pruneSelection() {
+        if !selectedAnnotations.isEmpty {
+            let alive = selectedAnnotations.filter { diagram.annotation($0) != nil }
+            if alive != selectedAnnotations { selectedAnnotations = alive }
+        }
         switch selection {
         case .none: break
         case .entities(let ids):
@@ -192,9 +251,10 @@ final class DiagramStore: ObservableObject {
             p.x -= 90; p.y -= 60
             while scene.boxes.contains(where: { $0.frame.insetBy(dx: -16, dy: -16).contains(p) }) { p.x += 30; p.y += 30 }
         }
-        let position = Point((Double(p.x) / 10).rounded() * 10, (Double(p.y) / 10).rounded() * 10)
+        let position = Point(Grid.snap(Double(p.x)), Grid.snap(Double(p.y)))
         var id = UUID()
         edit("New Entity") { id = $0.addEntity(named: name, at: position) }
+        selectedAnnotations = []
         selection = .entities([id])
         canvas?.reveal(id)
         if rename { canvas?.beginEdit(.entityName(id)) }
@@ -294,17 +354,27 @@ final class DiagramStore: ObservableObject {
     // MARK: Selection commands
 
     func select(entity id: UUID, reveal: Bool = true) {
+        selectedAnnotations = []
         selection = .entities([id])
         if reveal { canvas?.reveal(id) }
     }
 
     func selectAll() {
         selection = diagram.entities.isEmpty ? .none : .entities(Set(diagram.entities.map(\.id)))
+        selectedAnnotations = Set(diagram.annotations.map(\.id))
     }
 
-    var canDelete: Bool { selection != .none }
+    var canDelete: Bool { selection != .none || !selectedAnnotations.isEmpty }
 
     func deleteSelection() {
+        if !selectedAnnotations.isEmpty, selectedAttribute == nil {
+            let notes = selectedAnnotations, ids = selection.entityIDs
+            edit(ids.isEmpty ? (notes.count == 1 ? "Delete" : "Delete \(notes.count) Things") : "Delete") { d in
+                d.annotations.removeAll { notes.contains($0.id) }
+                d.remove(entities: ids)
+            }
+            return
+        }
         switch selection {
         case .none: break
         case .entities(let ids):
@@ -333,10 +403,11 @@ final class DiagramStore: ObservableObject {
     /// statements as text for pasting anywhere else.
     func copySelection() {
         let ids = selection.entityIDs
-        guard !ids.isEmpty else { return }
+        guard !ids.isEmpty || !selectedAnnotations.isEmpty else { return }
         var part = Diagram()
         part.entities = diagram.entities.filter { ids.contains($0.id) }
         part.relationships = diagram.relationships.filter { ids.contains($0.parent) && ids.contains($0.child) }
+        part.annotations = diagram.annotations.filter { selectedAnnotations.contains($0.id) }
         part.domains = diagram.domains
         part.dialect = diagram.dialect
         guard let data = try? part.encoded() else { return }
@@ -346,7 +417,8 @@ final class DiagramStore: ObservableObject {
         let pb = pasteboard
         pb.clearContents()
         pb.setData(data, forType: Self.pasteboardType)
-        pb.setString(SQLExport.script(for: sqlPart), forType: .string)
+        if !part.entities.isEmpty { pb.setString(SQLExport.script(for: sqlPart), forType: .string) }
+        else if let text = part.annotations.first(where: { !$0.text.isEmpty })?.text { pb.setString(text, forType: .string) }
     }
 
     private static func detachForeignKeys(_ d: inout Diagram) {
@@ -363,6 +435,7 @@ final class DiagramStore: ObservableObject {
     var canPaste: Bool {
         let pb = pasteboard
         if pb.data(forType: Self.pasteboardType) != nil { return true }
+        if pb.data(forType: .png) != nil || pb.data(forType: .tiff) != nil { return true }
         return pb.string(forType: .string).map { $0.range(of: "create table", options: .caseInsensitive) != nil } ?? false
     }
 
@@ -373,6 +446,9 @@ final class DiagramStore: ObservableObject {
             insert(part, at: point, name: "Paste")
         } else if let text = pb.string(forType: .string), text.range(of: "create table", options: .caseInsensitive) != nil {
             importSQL(text, replace: false, at: point)
+        } else if let picture = pb.data(forType: .png) ?? pb.data(forType: .tiff) {
+            // A copied picture lands on the canvas as a picture.
+            addImage(picture, at: point)
         } else {
             NSSound.beep()
         }
@@ -380,10 +456,11 @@ final class DiagramStore: ObservableObject {
 
     func duplicateSelection() {
         let ids = selection.entityIDs
-        guard !ids.isEmpty else { return }
+        guard !ids.isEmpty || !selectedAnnotations.isEmpty else { return }
         var part = Diagram()
         part.entities = diagram.entities.filter { ids.contains($0.id) }
         part.relationships = diagram.relationships.filter { ids.contains($0.parent) && ids.contains($0.child) }
+        part.annotations = diagram.annotations.filter { selectedAnnotations.contains($0.id) }
         insert(part, at: nil, name: "Duplicate")
     }
 
@@ -393,10 +470,12 @@ final class DiagramStore: ObservableObject {
         Self.detachForeignKeys(&part)
         var entityIDs: [UUID: UUID] = [:], attributeIDs: [UUID: UUID] = [:], relationshipIDs: [UUID: UUID] = [:]
         for r in part.relationships { relationshipIDs[r.id] = UUID() }
-        let minX = part.entities.map(\.position.x).min() ?? 0, minY = part.entities.map(\.position.y).min() ?? 0
+        let minX = (part.entities.map(\.position.x) + part.annotations.map(\.bounds.x)).min() ?? 0
+        let minY = (part.entities.map(\.position.y) + part.annotations.map(\.bounds.y)).min() ?? 0
         // At the pointer when asked; otherwise a little down and right of where it came from.
-        let shift: (Double, Double) = point.map { ((Double($0.x) / 10).rounded() * 10 - minX, (Double($0.y) / 10).rounded() * 10 - minY) } ?? (30, 30)
+        let shift: (Double, Double) = point.map { (Grid.snap(Double($0.x)) - minX, Grid.snap(Double($0.y)) - minY) } ?? (30, 30)
         var newIDs: Set<UUID> = []
+        var newNotes: Set<UUID> = []
         edit(name) { d in
             for var e in part.entities {
                 let id = UUID()
@@ -430,8 +509,19 @@ final class DiagramStore: ObservableObject {
                 d.relationships.append(r)
             }
             for domain in part.domains where d.domain(named: domain.name) == nil { d.domains.append(domain) }
+            for var a in part.annotations {
+                a.id = UUID()
+                a.move(by: shift.0, shift.1)
+                // A note about a copied entity is about the copy; about one that wasn't copied, it stays about that one.
+                if let e = a.entity, let copy = entityIDs[e] { a.entity = copy; a.attribute = a.attribute.flatMap { attributeIDs[$0] } }
+                d.annotations.append(a)
+                newNotes.insert(a.id)
+            }
         }
-        if !newIDs.isEmpty { selection = .entities(newIDs) }
+        if !newIDs.isEmpty || !newNotes.isEmpty {
+            selection = newIDs.isEmpty ? .none : .entities(newIDs)
+            selectedAnnotations = newNotes
+        }
     }
 
     // MARK: SQL in
@@ -587,10 +677,171 @@ final class DiagramStore: ObservableObject {
         }
         edit("Align") { d in
             for (id, p) in target {
-                let x = (Double(p.x) / 10).rounded() * 10, y = (Double(p.y) / 10).rounded() * 10
+                let x = Grid.snap(Double(p.x)), y = Grid.snap(Double(p.y))
                 d.update(entity: id) { $0.position = Point(x, y) }
             }
         }
+    }
+
+    // MARK: Notes, shapes and drawings
+
+    /// Puts a note, text, shape or drawing on the canvas and selects it.
+    @discardableResult
+    func add(_ annotation: Annotation, name: String = "Add") -> UUID {
+        edit(name) { $0.annotations.append(annotation) }
+        selection = .none
+        selectedAnnotations = [annotation.id]
+        return annotation.id
+    }
+
+    /// A new note in the middle of what you see (or at a point), ready to type in. `entity`: what it is about.
+    func newNote(_ kind: Annotation.Kind = .note, at point: CGPoint? = nil, about entity: UUID? = nil, attribute: UUID? = nil) {
+        var p = point ?? canvas?.visibleCentre ?? CGPoint(x: 200, y: 160)
+        if let entity, point == nil, let box = scene.box(entity) { p = CGPoint(x: box.frame.maxX + 40, y: box.frame.minY) }
+        let size: (Double, Double) = kind == .note ? (180, 70) : kind == .text ? (170, 24) : (240, 160)
+        var a = Annotation(kind: kind, x: Grid.snap(Double(p.x)), y: Grid.snap(Double(p.y)), width: size.0, height: size.1)
+        a.entity = entity
+        a.attribute = attribute
+        let id = add(a, name: kind == .note ? "New Note" : "New Text")
+        if kind == .note || kind == .text { canvas?.beginEdit(.annotation(id)) }
+    }
+
+    /// A picture on the canvas, no wider than 480 points to start with.
+    func addImage(_ data: Data, at point: CGPoint? = nil) {
+        guard let image = NSImage(data: data), image.size.width > 0 else { NSSound.beep(); return }
+        // Kept in the file as PNG; a large photo is brought down to what a diagram needs.
+        var stored = data
+        if data.count > 600_000, let rep = NSBitmapImageRep(data: data) {
+            stored = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) ?? data
+        }
+        let scale = min(1, 480 / image.size.width)
+        let p = point ?? canvas?.visibleCentre ?? CGPoint(x: 200, y: 160)
+        var a = Annotation(kind: .image, x: Grid.snap(Double(p.x)), y: Grid.snap(Double(p.y)), width: Double(image.size.width * scale), height: Double(image.size.height * scale))
+        a.image = stored.base64EncodedString()
+        add(a, name: "Add Picture")
+    }
+
+    func chooseImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .tiff, .gif, .heic]
+        panel.message = "Choose a picture to put on the canvas."
+        guard panel.runModal() == .OK, let url = panel.url, let data = try? Data(contentsOf: url) else { return }
+        addImage(data)
+    }
+
+    // MARK: On top, underneath, and the same width
+
+    var canArrange: Bool { !selection.entityIDs.isEmpty || !selectedAnnotations.isEmpty }
+
+    /// Puts what is selected on top of everything else of its sort, or under it.
+    func restack(toFront: Bool) {
+        let ids = selection.entityIDs, notes = selectedAnnotations
+        guard !ids.isEmpty || !notes.isEmpty else { return }
+        edit(toFront ? "Bring to Front" : "Send to Back") { d in
+            if !ids.isEmpty {
+                let others = d.entities.filter { !ids.contains($0.id) }.map(\.z)
+                let z = toFront ? (others.max() ?? 0) + 1 : (others.min() ?? 0) - 1
+                for id in ids { d.update(entity: id) { $0.z = z } }
+            }
+            if !notes.isEmpty {
+                let moved = d.annotations.filter { notes.contains($0.id) }
+                d.annotations.removeAll { notes.contains($0.id) }
+                if toFront { d.annotations.append(contentsOf: moved) } else { d.annotations.insert(contentsOf: moved, at: 0) }
+            }
+        }
+    }
+
+    /// Makes the selected entities as wide as the widest of them.
+    func sameWidth() {
+        let ids = selection.entityIDs
+        let widest = scene.boxes.filter { ids.contains($0.id) }.map(\.frame.width).max() ?? 0
+        guard ids.count > 1, widest > 0 else { return }
+        edit("Make Same Width") { d in for id in ids { d.update(entity: id) { $0.width = Double(widest) } } }
+    }
+
+    /// Lets the app find the way again for every line you bent yourself.
+    func rerouteAll() {
+        edit("Find Every Line’s Way Again") { d in for i in d.relationships.indices { d.relationships[i].waypoints = [] } }
+    }
+
+    // MARK: Colours from one thing to another
+
+    private var copiedStyle: (style: Style, color: EntityColor)?
+    var canPasteStyle: Bool { copiedStyle != nil && (canArrange || selection.relationship != nil) }
+    var canCopyStyle: Bool { selection.singleEntity != nil || selectedAnnotations.count == 1 || selection.relationship != nil }
+
+    func copyStyle() {
+        if let id = selection.singleEntity, let e = diagram.entity(id) { copiedStyle = (e.style, e.color) }
+        else if let id = selectedAnnotations.first, let a = diagram.annotation(id) { copiedStyle = (a.style, .none) }
+        else if let id = selection.relationship, let r = diagram.relationship(id) { copiedStyle = (r.style, .none) }
+    }
+
+    func pasteStyle() {
+        guard let copied = copiedStyle else { return }
+        let ids = selection.entityIDs, notes = selectedAnnotations, line = selection.relationship
+        edit("Paste Colours") { d in
+            for id in ids { d.update(entity: id) { $0.style = copied.style; $0.color = copied.color } }
+            for id in notes { d.update(annotation: id) { $0.style = copied.style } }
+            if let line { d.update(relationship: line) { $0.style.line = copied.style.line } }
+        }
+    }
+
+    // MARK: Find and replace
+
+    struct Replacement {
+        var find = ""
+        var with = ""
+        var matchCase = false
+        var names = true
+        var databaseNames = true
+        var definitions = false
+    }
+
+    /// How many names (and definitions) hold the text, and with `apply` the same count after replacing them all.
+    @discardableResult
+    func replace(_ r: Replacement, apply: Bool) -> Int {
+        guard !r.find.isEmpty else { return 0 }
+        var count = 0
+        let options: String.CompareOptions = r.matchCase ? [] : [.caseInsensitive]
+        func swap(_ text: inout String) {
+            guard text.range(of: r.find, options: options) != nil else { return }
+            count += 1
+            text = text.replacingOccurrences(of: r.find, with: r.with, options: options)
+        }
+        var d = diagram
+        for e in d.entities.indices {
+            if r.names { swap(&d.entities[e].name) }
+            if r.databaseNames { swap(&d.entities[e].physicalName) }
+            if r.definitions { swap(&d.entities[e].definition) }
+            for a in d.entities[e].attributes.indices {
+                // A foreign key column that follows its parent is renamed with the parent.
+                if d.entities[e].attributes[a].foreignKey?.followsName == true { continue }
+                let before = d.entities[e].attributes[a].name
+                if r.names { swap(&d.entities[e].attributes[a].name) }
+                if d.entities[e].attributes[a].name != before { d.entities[e].attributes[a].foreignKey?.followsName = false }
+                if r.databaseNames { swap(&d.entities[e].attributes[a].physicalName) }
+                if r.definitions { swap(&d.entities[e].attributes[a].definition) }
+            }
+        }
+        for i in d.relationships.indices where r.names {
+            swap(&d.relationships[i].name)
+            swap(&d.relationships[i].childName)
+        }
+        for i in d.domains.indices where r.names {
+            let before = d.domains[i].name
+            swap(&d.domains[i].name)
+            // Attributes of the domain follow its new name.
+            if d.domains[i].name != before {
+                for e in d.entities.indices {
+                    for a in d.entities[e].attributes.indices where d.entities[e].attributes[a].type.lowercased() == before.lowercased() {
+                        d.entities[e].attributes[a].type = d.domains[i].name
+                    }
+                }
+            }
+        }
+        for i in d.annotations.indices where r.definitions { swap(&d.annotations[i].text) }
+        if apply, count > 0 { edit("Replace All") { $0 = d } }
+        return count
     }
 
     // MARK: Domains

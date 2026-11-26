@@ -118,7 +118,22 @@ public enum Sample {
         sits.childLower = 3
         sits.childUpper = 3
         sits.tags = [Tag(name: "since", value: "2026")]
+        // A line with a point of its own, and a curved one.
+        works.waypoints = [Point(740, 40)]
+        sits.shape = .curved
         d.relationships = [isEmployee, isContractor, carries, works, sits]
+
+        // On the canvas, not in the model: a box around the people, a note about one attribute, a title, an arrow.
+        var group = Annotation(kind: .rectangle, x: 220, y: 340, width: 560, height: 200, text: "Kinds of person")
+        group.style.fill = "#99CCFF"
+        var note = Annotation(kind: .note, x: 90, y: 262, width: 200, height: 56, text: "One letter: E for an employee, C for a contractor.")
+        note.entity = person
+        note.attribute = kind
+        var title = Annotation(kind: .text, x: 80, y: 20, width: 260, height: 26, text: "Who works where")
+        title.size = 18
+        let arrow = Annotation(kind: .arrow, points: [Point(350, 34), Point(430, 72)])
+        d.annotations = [group, note, title, arrow]
+        d.display.lineJumps = true
         d.normalize()
         return d
     }
