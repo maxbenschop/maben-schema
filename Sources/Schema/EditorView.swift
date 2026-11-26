@@ -38,6 +38,7 @@ struct EditorView: View {
             switch sheet {
             case .importSQL: ImportSheet(store: store).tint(MB.accent)
             case .addDomains: AddDomainsSheet(store: store).tint(MB.accent)
+            case .replace: ReplaceSheet(store: store).tint(MB.accent)
             }
         }
     }
@@ -102,11 +103,23 @@ struct CanvasArea: View {
     @ObservedObject var store: DiagramStore
     @State private var showProblems = false
     @AppStorage("showHints") private var showHints = true
+    @AppStorage("showMap") private var showMap = false
 
     var body: some View {
         ZStack {
             CanvasRepresentable(store: store)
-            if store.diagram.entities.isEmpty { Welcome(store: store) }
+            if store.diagram.entities.isEmpty, store.diagram.annotations.isEmpty, store.tool == .pointer { Welcome(store: store) }
+        }
+        .overlay(alignment: .topLeading) { ToolStrip(store: store).padding(12) }
+        .overlay(alignment: .topTrailing) {
+            if showMap, !store.diagram.entities.isEmpty {
+                MiniMap(store: store)
+                    .frame(width: 200, height: 140)
+                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(MB.card.opacity(0.94)))
+                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(MB.line))
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .padding(12)
+            }
         }
         .overlay(alignment: .bottomLeading) { zoomControl.padding(12) }
         .overlay(alignment: .bottomTrailing) { problemsChip.padding(12) }
@@ -140,6 +153,7 @@ struct CanvasArea: View {
             MBIconButton(symbol: "plus", help: "Zoom in (⌘+)") { store.canvas?.zoomIn() }
             Hairline(vertical: true).frame(height: 16).padding(.horizontal, 2)
             MBIconButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Zoom to fit (⌘1)") { store.canvas?.zoomToFit() }
+            MBIconButton(symbol: "map", help: "Show or hide the map of the whole diagram (⌥⌘M)", active: showMap) { showMap.toggle() }
         }
         .padding(2)
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(MB.card))
@@ -170,9 +184,26 @@ struct CanvasArea: View {
         }
     }
 
+    private var toolHint: String {
+        switch store.tool {
+        case .note, .text: return "Click where the \(store.tool.title.lowercased()) goes"
+        case .pen, .highlighter: return "Draw on the canvas"
+        default: return "Drag the \(store.tool.title.lowercased()) out on the canvas"
+        }
+    }
+
     /// One quiet line that says what you can do with what's selected.
     private var hint: some View {
         HStack(spacing: 6) {
+            if store.tool != .pointer {
+                Text(toolHint)
+                Text("·").foregroundStyle(MB.dim)
+                MBKey(text: "esc"); Text("back to the pointer")
+            } else if !store.selectedAnnotations.isEmpty, store.selection.entityIDs.isEmpty {
+                MBKey(text: "↩"); Text("type in it")
+                Text("·").foregroundStyle(MB.dim)
+                Text("drag a corner to resize it")
+            } else {
             switch store.selection {
             case .entities(let ids) where ids.count == 1:
                 MBKey(text: "↩"); Text("add an attribute")
@@ -185,11 +216,14 @@ struct CanvasArea: View {
             case .relationship:
                 MBKey(text: "↩"); Text("name it")
                 Text("·").foregroundStyle(MB.dim)
-                Text("right-click, or use the inspector, to change its kind")
+                Text("drag the line to bend it")
+                Text("·").foregroundStyle(MB.dim)
+                Text("right-click to change its kind")
             default:
                 Text("Double-click the canvas for a new entity")
                 Text("·").foregroundStyle(MB.dim)
                 MBKey(text: "⌘K"); Text("find")
+            }
             }
         }
         .font(.system(size: 11.5))
@@ -454,6 +488,14 @@ struct PaletteView: View {
             Item(id: "c.domain", title: "New Domain", detail: "", symbol: "textformat.abc") { store.newDomain() },
             Item(id: "c.domains", title: "Add Several Domains…", detail: "", symbol: "text.badge.plus") { store.sheet = .addDomains },
             Item(id: "c.tidy", title: "Tidy Up", detail: "⌃⌘L", symbol: "wand.and.stars") { store.tidyUp() },
+            Item(id: "c.note", title: "New Note", detail: "", symbol: "note.text") { store.newNote(.note) },
+            Item(id: "c.text", title: "New Text", detail: "", symbol: "textformat") { store.newNote(.text) },
+            Item(id: "c.picture", title: "Add a Picture…", detail: "", symbol: "photo") { store.chooseImage() },
+            Item(id: "c.replace", title: "Find and Replace…", detail: "⌥⌘F", symbol: "arrow.left.arrow.right") { store.sheet = .replace },
+            Item(id: "c.jumps", title: store.diagram.display.lineJumps ? "Lines Cross Flat" : "Lines Hop Over Each Other", detail: "lines", symbol: "point.topleft.down.to.point.bottomright.curvepath") {
+                store.edit("Change Lines") { $0.display.lineJumps.toggle() }
+            },
+            Item(id: "c.map", title: "Show or Hide the Map", detail: "⌥⌘M", symbol: "map") { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "showMap"), forKey: "showMap") },
             Item(id: "c.fit", title: "Zoom to Fit", detail: "⌘1", symbol: "arrow.up.left.and.arrow.down.right") { store.canvas?.zoomToFit() },
             Item(id: "c.sql", title: store.showSQL ? "Hide SQL" : "Show SQL", detail: "⌥⌘S", symbol: "chevron.left.forwardslash.chevron.right") { store.showSQL.toggle() },
             Item(id: "c.import", title: "Import SQL…", detail: "⇧⌘I", symbol: "square.and.arrow.down") { store.sheet = .importSQL },

@@ -225,10 +225,12 @@ public struct Entity: Codable, Identifiable, Equatable {
     public var width = 0.0
     /// How much of it is drawn, when that differs from the rest of the diagram.
     public var level: DetailLevel?
+    /// Where it lies when entities overlap: a higher one is on top.
+    public var z = 0
 
     enum CodingKeys: String, CodingKey {
         case id, name, physicalName, definition, position, color, attributes
-        case kind, package, indexes, alias1, alias2, tags, links, style, width, level
+        case kind, package, indexes, alias1, alias2, tags, links, style, width, level, z
     }
 
     public init(id: UUID = UUID(), name: String, physicalName: String = "", definition: String = "", position: Point = .zero,
@@ -261,6 +263,7 @@ public struct Entity: Codable, Identifiable, Equatable {
         style = try c.decodeIfPresent(Style.self, forKey: .style) ?? Style()
         width = try c.decodeIfPresent(Double.self, forKey: .width) ?? 0
         level = try c.decodeIfPresent(DetailLevel.self, forKey: .level)
+        z = try c.decodeIfPresent(Int.self, forKey: .z) ?? 0
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -283,6 +286,7 @@ public struct Entity: Codable, Identifiable, Equatable {
         try a.put(style, .style, unless: Style())
         try a.put(width, .width, unless: 0)
         try a.put(level, .level, unless: nil)
+        try a.put(z, .z, unless: 0)
     }
 
     public var tableName: String { physicalName.isEmpty ? Naming.physical(name) : physicalName }
@@ -589,8 +593,12 @@ public struct DisplayOptions: Codable, Equatable {
     public var level: DetailLevel = .all
     public var showTypes = true
     public var showConstraints = true
+    /// Where two lines cross, one hops over the other.
+    public var lineJumps = false
 
     public init() {}
+
+    enum CodingKeys: String, CodingKey { case notation, names, level, showTypes, showConstraints, lineJumps }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -599,6 +607,18 @@ public struct DisplayOptions: Codable, Equatable {
         level = try c.decodeIfPresent(DetailLevel.self, forKey: .level) ?? .all
         showTypes = try c.decodeIfPresent(Bool.self, forKey: .showTypes) ?? true
         showConstraints = try c.decodeIfPresent(Bool.self, forKey: .showConstraints) ?? true
+        lineJumps = try c.decodeIfPresent(Bool.self, forKey: .lineJumps) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(notation, forKey: .notation)
+        try c.encode(names, forKey: .names)
+        try c.encode(level, forKey: .level)
+        try c.encode(showTypes, forKey: .showTypes)
+        try c.encode(showConstraints, forKey: .showConstraints)
+        // How lines are drawn where they cross loses nothing in an older app, so it doesn't ask for the newer version.
+        if lineJumps { try c.encode(lineJumps, forKey: .lineJumps) }
     }
 }
 
@@ -613,6 +633,103 @@ public enum Dialect: String, Codable, CaseIterable {
         case .sqlserver: "SQL Server"
         case .standard: "Standard SQL"
         }
+    }
+}
+
+/// Something drawn on the canvas that isn't part of the model: a note, a line of text, a shape, a drawing.
+public struct Annotation: Codable, Identifiable, Equatable {
+    public enum Kind: String, Codable, CaseIterable {
+        /// A sheet of text with a folded corner. It can point at an entity or one of its attributes.
+        case note
+        /// Text with nothing around it.
+        case text
+        case rectangle, oval
+        /// A straight line between two points; `arrow` has a head at its end.
+        case line, arrow
+        /// A line drawn by hand; `highlighter` is the same, wide and see-through.
+        case freehand, highlighter
+        case image
+
+        /// The kinds that have a box you can resize; the others are their points.
+        public var hasFrame: Bool { ![.line, .arrow, .freehand, .highlighter].contains(self) }
+        /// Drawn under the entities (a box around a group of them, a picture); the rest goes on top.
+        public var isBackground: Bool { [.rectangle, .oval, .image, .highlighter].contains(self) }
+    }
+
+    public var id: UUID
+    public var kind: Kind
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+    public var text = ""
+    /// For lines and drawings: the points, on the canvas.
+    public var points: [Point] = []
+    public var style = Style()
+    /// The size of its text. Zero: the usual size.
+    public var size = 0.0
+    /// For a note: the entity it is about, and the attribute in it; a thin line is drawn to it.
+    public var entity: UUID?
+    public var attribute: UUID?
+    /// For an image: the picture itself (PNG or JPEG), as base64.
+    public var image = ""
+
+    public init(id: UUID = UUID(), kind: Kind, x: Double = 0, y: Double = 0, width: Double = 0, height: Double = 0, text: String = "", points: [Point] = []) {
+        self.id = id
+        self.kind = kind
+        self.x = x; self.y = y; self.width = width; self.height = height
+        self.text = text
+        self.points = points
+    }
+
+    enum CodingKeys: String, CodingKey { case id, kind, x, y, width, height, text, points, style, size, entity, attribute, image }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .note
+        x = try c.decodeIfPresent(Double.self, forKey: .x) ?? 0
+        y = try c.decodeIfPresent(Double.self, forKey: .y) ?? 0
+        width = try c.decodeIfPresent(Double.self, forKey: .width) ?? 0
+        height = try c.decodeIfPresent(Double.self, forKey: .height) ?? 0
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        points = try c.decodeIfPresent([Point].self, forKey: .points) ?? []
+        style = try c.decodeIfPresent(Style.self, forKey: .style) ?? Style()
+        size = try c.decodeIfPresent(Double.self, forKey: .size) ?? 0
+        entity = try c.decodeIfPresent(UUID.self, forKey: .entity)
+        attribute = try c.decodeIfPresent(UUID.self, forKey: .attribute)
+        image = try c.decodeIfPresent(String.self, forKey: .image) ?? ""
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(kind, forKey: .kind)
+        if kind.hasFrame {
+            try c.encode(x, forKey: .x); try c.encode(y, forKey: .y)
+            try c.encode(width, forKey: .width); try c.encode(height, forKey: .height)
+        }
+        if !text.isEmpty { try c.encode(text, forKey: .text) }
+        if !points.isEmpty { try c.encode(points, forKey: .points) }
+        if !style.isPlain { try c.encode(style, forKey: .style) }
+        if size != 0 { try c.encode(size, forKey: .size) }
+        try c.encodeIfPresent(entity, forKey: .entity)
+        try c.encodeIfPresent(attribute, forKey: .attribute)
+        if !image.isEmpty { try c.encode(image, forKey: .image) }
+    }
+
+    /// The rectangle around it: its box, or what its points span.
+    public var bounds: (x: Double, y: Double, width: Double, height: Double) {
+        guard !kind.hasFrame else { return (x, y, width, height) }
+        guard let first = points.first else { return (x, y, 0, 0) }
+        var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
+        for p in points { minX = min(minX, p.x); maxX = max(maxX, p.x); minY = min(minY, p.y); maxY = max(maxY, p.y) }
+        return (minX, minY, maxX - minX, maxY - minY)
+    }
+
+    public mutating func move(by dx: Double, _ dy: Double) {
+        x += dx; y += dy
+        for i in points.indices { points[i] = Point(points[i].x + dx, points[i].y + dy) }
     }
 }
 
@@ -634,9 +751,11 @@ public struct Diagram: Codable, Equatable {
     public var dataTypes: [DataType] = []
     /// The type an attribute gets when you type none and its name doesn't say. Empty: `VARCHAR(255)`.
     public var defaultType = ""
+    /// Notes, text, shapes and drawings on the canvas, the first drawn first.
+    public var annotations: [Annotation] = []
 
     enum CodingKeys: String, CodingKey {
-        case version, entities, relationships, domains, display, dialect, entityTypes, dataTypes, defaultType
+        case version, entities, relationships, domains, display, dialect, entityTypes, dataTypes, defaultType, annotations
     }
 
     public init() {}
@@ -652,6 +771,7 @@ public struct Diagram: Codable, Equatable {
         entityTypes = try c.decodeIfPresent([EntityType].self, forKey: .entityTypes) ?? EntityType.standard
         dataTypes = try c.decodeIfPresent([DataType].self, forKey: .dataTypes) ?? []
         defaultType = try c.decodeIfPresent(String.self, forKey: .defaultType) ?? ""
+        annotations = try c.decodeIfPresent([Annotation].self, forKey: .annotations) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -665,6 +785,7 @@ public struct Diagram: Codable, Equatable {
         try a.put(entityTypes, .entityTypes, unless: EntityType.standard)
         try a.put(dataTypes, .dataTypes, unless: [])
         try a.put(defaultType, .defaultType, unless: "")
+        try a.put(annotations, .annotations, unless: [])
         // Last, when everything inside has said whether it needs the newer version.
         try a.container.encode(a.use?.newer == false ? 1 : Diagram.currentVersion, forKey: .version)
     }
@@ -692,6 +813,12 @@ public struct Diagram: Codable, Equatable {
     public func entity(_ id: UUID) -> Entity? { entities.first { $0.id == id } }
     public func relationship(_ id: UUID) -> Relationship? { relationships.first { $0.id == id } }
     public func domain(_ id: UUID) -> Domain? { domains.first { $0.id == id } }
+    public func annotation(_ id: UUID) -> Annotation? { annotations.first { $0.id == id } }
+
+    public mutating func update(annotation id: UUID, _ change: (inout Annotation) -> Void) {
+        guard let i = annotations.firstIndex(where: { $0.id == id }) else { return }
+        change(&annotations[i])
+    }
     public func domain(named name: String) -> Domain? {
         let key = name.trimmingCharacters(in: .whitespaces).lowercased()
         return key.isEmpty ? nil : domains.first { $0.name.lowercased() == key }

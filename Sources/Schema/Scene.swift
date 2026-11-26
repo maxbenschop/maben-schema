@@ -91,6 +91,9 @@ struct EntityBox {
     /// The four dots you drag to make a relationship.
     var handles: [CGPoint] { [anchor(.top, at: 0.5), anchor(.right, at: 0.5), anchor(.bottom, at: 0.5), anchor(.left, at: 0.5)] }
 
+    /// The corner you drag to make the entity wider.
+    var resizeGrip: CGRect { CGRect(x: frame.maxX - 12, y: frame.maxY - 12, width: 14, height: 14) }
+
     /// The "+ Attribute" button under a selected entity.
     var addButton: CGRect { CGRect(x: frame.minX, y: frame.maxY + 8, width: 100, height: 22) }
 
@@ -99,12 +102,51 @@ struct EntityBox {
     var pendingRow: RowBox? { rows.first { if case .pending = $0.kind { true } else { false } } }
 }
 
+/// A note, text, shape or drawing as drawn.
+struct AnnotationBox {
+    let annotation: Annotation
+    let frame: CGRect
+
+    var id: UUID { annotation.id }
+    var points: [CGPoint] { annotation.points.map { CGPoint(x: $0.x, y: $0.y) } }
+
+    /// The four corners you drag to resize it, clockwise from the top left.
+    var corners: [CGPoint] {
+        [CGPoint(x: frame.minX, y: frame.minY), CGPoint(x: frame.maxX, y: frame.minY), CGPoint(x: frame.maxX, y: frame.maxY), CGPoint(x: frame.minX, y: frame.maxY)]
+    }
+
+    /// Whether a click here is on it: inside its box, or near its line.
+    func contains(_ p: CGPoint, tolerance: CGFloat) -> Bool {
+        switch annotation.kind {
+        case .line, .arrow, .freehand, .highlighter:
+            let reach = tolerance + (annotation.kind == .highlighter ? 7 : 2)
+            let pts = points
+            for (a, b) in zip(pts, pts.dropFirst()) {
+                let dx = b.x - a.x, dy = b.y - a.y, length = dx * dx + dy * dy
+                let t = length == 0 ? 0 : max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length))
+                if hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)) <= reach { return true }
+            }
+            return false
+        case .rectangle, .oval:
+            // An empty shape is taken by its edge, so what lies inside it can still be clicked.
+            guard annotation.style.fill.isEmpty else { return frame.contains(p) }
+            return frame.insetBy(dx: -tolerance, dy: -tolerance).contains(p) && !frame.insetBy(dx: tolerance + 4, dy: tolerance + 4).contains(p)
+        default:
+            return frame.contains(p)
+        }
+    }
+}
+
 /// A relationship as drawn.
 struct LinkPath {
     let relationship: Relationship
     var points: [CGPoint]
     let parentSide: Side
     let childSide: Side
+    /// Drawn as one smooth curve through its points.
+    var curved = false
+    /// Its points are yours (waypoints), not found by the app.
+    var manual = false
 
     var id: UUID { relationship.id }
 
@@ -132,6 +174,7 @@ final class Scene {
     let diagram: Diagram
     private(set) var boxes: [EntityBox] = []
     private(set) var links: [LinkPath] = []
+    private(set) var annotations: [AnnotationBox] = []
     private var index: [UUID: Int] = [:]
     private var linkIndex: [UUID: Int] = [:]
     private var linkSlot: [Int: Int] = [:]
@@ -141,9 +184,17 @@ final class Scene {
         self.diagram = diagram
         let dependent = diagram.dependentEntities
         boxes.reserveCapacity(diagram.entities.count)
-        for e in diagram.entities {
+        // Drawn in the order they were made, unless you put one on top of or under the others.
+        let ordered = diagram.entities.contains { $0.z != 0 }
+            ? diagram.entities.enumerated().sorted { $0.element.z != $1.element.z ? $0.element.z < $1.element.z : $0.offset < $1.offset }.map(\.element)
+            : diagram.entities
+        for e in ordered {
             index[e.id] = boxes.count
             boxes.append(Self.measure(e, in: diagram, pending: pendingRow == e.id, dependent: dependent.contains(e.id)))
+        }
+        for a in diagram.annotations {
+            let b = a.bounds
+            annotations.append(AnnotationBox(annotation: a, frame: CGRect(x: b.x, y: b.y, width: b.width, height: b.height)))
         }
         for (i, r) in diagram.relationships.enumerated() { linkIndex[r.id] = i }
         route()
@@ -162,6 +213,13 @@ final class Scene {
     /// The entity under a point; the one drawn last is on top.
     func entity(at p: CGPoint) -> EntityBox? { boxes.last { $0.frame.contains(p) } }
 
+    /// The note or shape under a point, the one drawn last first. `background`: the ones under the entities.
+    func annotation(at p: CGPoint, tolerance: CGFloat, background: Bool) -> AnnotationBox? {
+        annotations.last { $0.annotation.kind.isBackground == background && $0.contains(p, tolerance: tolerance) }
+    }
+
+    func annotation(_ id: UUID) -> AnnotationBox? { annotations.first { $0.id == id } }
+
     func link(at p: CGPoint, tolerance: CGFloat) -> LinkPath? {
         links.filter { $0.distance(to: p) <= tolerance }.min { $0.distance(to: p) < $1.distance(to: p) }
     }
@@ -174,6 +232,7 @@ final class Scene {
     func bounds(of ids: Set<UUID>? = nil) -> CGRect? {
         var rect: CGRect?
         for b in boxes where ids?.contains(b.id) ?? true { rect = rect?.union(b.frame) ?? b.frame }
+        for a in annotations where ids?.contains(a.id) ?? true { rect = rect?.union(a.frame) ?? a.frame }
         for l in links where ids == nil || (ids!.contains(l.relationship.parent) && ids!.contains(l.relationship.child)) {
             for p in l.points { rect = rect?.union(CGRect(origin: p, size: .zero)) ?? CGRect(origin: p, size: .zero) }
         }
@@ -264,13 +323,50 @@ final class Scene {
         return (.right, .right)   // the boxes overlap: loop around
     }
 
+    /// The side of a box a point lies off, and where on that side a line to the point leaves.
+    private static func exit(_ f: CGRect, towards p: CGPoint) -> (Side, CGPoint) {
+        let inset: CGFloat = 8
+        if p.x > f.maxX { return (.right, CGPoint(x: f.maxX, y: min(max(p.y, f.minY + inset), f.maxY - inset))) }
+        if p.x < f.minX { return (.left, CGPoint(x: f.minX, y: min(max(p.y, f.minY + inset), f.maxY - inset))) }
+        if p.y < f.midY { return (.top, CGPoint(x: min(max(p.x, f.minX + inset), f.maxX - inset), y: f.minY)) }
+        return (.bottom, CGPoint(x: min(max(p.x, f.minX + inset), f.maxX - inset), y: f.maxY))
+    }
+
+    /// Where the straight line from the middle of a box to a point crosses the box's edge.
+    private static func edge(_ f: CGRect, towards p: CGPoint) -> (Side, CGPoint) {
+        let c = CGPoint(x: f.midX, y: f.midY)
+        let dx = p.x - c.x, dy = p.y - c.y
+        guard dx != 0 || dy != 0 else { return (.right, CGPoint(x: f.maxX, y: c.y)) }
+        let tx = dx == 0 ? CGFloat.greatestFiniteMagnitude : (f.width / 2) / abs(dx)
+        let ty = dy == 0 ? CGFloat.greatestFiniteMagnitude : (f.height / 2) / abs(dy)
+        let t = min(tx, ty)
+        let side: Side = tx < ty ? (dx > 0 ? .right : .left) : (dy > 0 ? .bottom : .top)
+        return (side, CGPoint(x: c.x + dx * t, y: c.y + dy * t))
+    }
+
     private func route() {
         struct End { let link: Int; let parent: Bool; let sortKey: CGFloat }
         var chosen: [(Side, Side)] = []
         var ends: [UUID: [Side: [End]]] = [:]
         let relationships = diagram.relationships
+        // Lines with points of your own, and straight ones, go where they are told; the rest share the sides.
+        var fixed: [Int: LinkPath] = [:]
         for (i, r) in relationships.enumerated() {
             guard let p = box(r.parent), let c = box(r.child) else { chosen.append((.right, .right)); continue }
+            if r.parent != r.child, !r.waypoints.isEmpty {
+                let way = r.waypoints.map { CGPoint(x: $0.x, y: $0.y) }
+                let (sa, a) = Self.exit(p.frame, towards: way[0]), (sb, b) = Self.exit(c.frame, towards: way[way.count - 1])
+                fixed[i] = LinkPath(relationship: r, points: [a] + way + [b], parentSide: sa, childSide: sb, curved: r.shape == .curved, manual: true)
+                chosen.append((sa, sb))
+                continue
+            }
+            if r.parent != r.child, r.shape == .straight, !p.frame.intersects(c.frame) {
+                let (sa, a) = Self.edge(p.frame, towards: CGPoint(x: c.frame.midX, y: c.frame.midY))
+                let (sb, b) = Self.edge(c.frame, towards: CGPoint(x: p.frame.midX, y: p.frame.midY))
+                fixed[i] = LinkPath(relationship: r, points: [a, b], parentSide: sa, childSide: sb)
+                chosen.append((sa, sb))
+                continue
+            }
             let s: (Side, Side) = r.parent == r.child ? (.right, .right) : Self.sides(p.frame, c.frame)
             chosen.append(s)
             // Ends on one side are ordered by where the other entity is, so lines don't cross on the way out.
@@ -290,6 +386,7 @@ final class Scene {
             }
         }
         for (i, r) in relationships.enumerated() {
+            if let path = fixed[i] { links.append(path); continue }
             guard let a = parentPoint[i], let b = childPoint[i] else { continue }
             let (sa, sb) = chosen[i]
             var points: [CGPoint]
@@ -310,7 +407,7 @@ final class Scene {
                 let y = ((a.y + b.y) / 2).rounded()
                 points = abs(a.x - b.x) < 0.5 ? [a, b] : [a, CGPoint(x: a.x, y: y), CGPoint(x: b.x, y: y), b]
             }
-            links.append(LinkPath(relationship: r, points: points, parentSide: sa, childSide: sb))
+            links.append(LinkPath(relationship: r, points: points, parentSide: sa, childSide: sb, curved: r.shape == .curved))
         }
     }
 }

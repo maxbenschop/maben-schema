@@ -27,12 +27,39 @@ enum Preferences {
     }
 }
 
+/// The grid on the canvas: whether it shows, how far apart its points are, and whether things land on it.
+enum Grid {
+    private static var d: UserDefaults { .standard }
+
+    static var show: Bool {
+        get { d.object(forKey: "grid.show") as? Bool ?? true }
+        set { d.set(newValue, forKey: "grid.show"); changed() }
+    }
+    static var snaps: Bool {
+        get { d.object(forKey: "grid.snap") as? Bool ?? true }
+        set { d.set(newValue, forKey: "grid.snap"); changed() }
+    }
+    /// The step things move by, in points: 5, 10 or 20.
+    static var size: Double {
+        get { let v = d.double(forKey: "grid.size"); return v >= 2 ? v : 10 }
+        set { d.set(newValue, forKey: "grid.size"); changed() }
+    }
+
+    /// A position on the grid (or left as it is when snapping is off, or `free` is held).
+    static func snap(_ v: Double, free: Bool = false) -> Double {
+        free || !snaps ? v.rounded() : (v / size).rounded() * size
+    }
+
+    static let didChange = Notification.Name("gg.maben.schema.gridChanged")
+    private static func changed() { NotificationCenter.default.post(name: didChange, object: nil) }
+}
+
 @MainActor
 final class SettingsWindowController: NSWindowController {
     static let shared = SettingsWindowController()
 
     private init() {
-        let size = NSSize(width: 560, height: 430)
+        let size = NSSize(width: 580, height: 520)
         let window = makeMabenWindow(size: size, resizable: false)
         window.title = "Settings"
         super.init(window: window)
@@ -60,6 +87,10 @@ struct SettingsView: View {
     @State private var notation = Preferences.notation
     @State private var dialect = Preferences.dialect
     @AppStorage("showHints") private var showHints = true
+    @AppStorage("showMap") private var showMap = false
+    @State private var showGrid = Grid.show
+    @State private var snaps = Grid.snaps
+    @State private var gridSize = Grid.size
     @ObservedObject private var updater = Updater.shared
     @State private var showNotes = false
 
@@ -84,7 +115,19 @@ struct SettingsView: View {
                 }
             }
             row("Canvas") {
-                Toggle("Show hints at the bottom of the canvas", isOn: $showHints).toggleStyle(.checkbox)
+                VStack(alignment: .leading, spacing: 7) {
+                    Toggle("Show hints at the bottom of the canvas", isOn: $showHints).toggleStyle(.checkbox)
+                    Toggle("Show a map of the whole diagram", isOn: $showMap).toggleStyle(.checkbox)
+                    Toggle("Show the grid", isOn: $showGrid).toggleStyle(.checkbox).onChange(of: showGrid) { _, v in Grid.show = v }
+                    HStack(spacing: 8) {
+                        Toggle("Things land on the grid, every", isOn: $snaps).toggleStyle(.checkbox).onChange(of: snaps) { _, v in Grid.snaps = v }
+                        Picker("", selection: $gridSize) {
+                            ForEach([5.0, 10.0, 20.0], id: \.self) { Text("\(Int($0)) points").tag($0) }
+                        }
+                        .labelsHidden().frame(width: 110).disabled(!snaps)
+                        .onChange(of: gridSize) { _, v in Grid.size = v }
+                    }
+                }
             }
             row("Updates") {
                 VStack(alignment: .leading, spacing: 7) {

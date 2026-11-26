@@ -9,6 +9,15 @@ struct Inspector: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                let notes = store.selectedAnnotations
+                if !notes.isEmpty, store.selection.entityIDs.isEmpty {
+                    // Notes and shapes only: one shows what it is, several what you can do with them together.
+                    if notes.count == 1, let a = store.diagram.annotation(notes.first!) {
+                        AnnotationInspector(store: store, annotation: a)
+                    } else {
+                        MultiInspector(store: store, count: 0, others: notes.count)
+                    }
+                } else {
                 switch store.selection {
                 case .none:
                     DiagramInspector(store: store)
@@ -16,7 +25,7 @@ struct Inspector: View {
                     if ids.count == 1, let e = store.diagram.entity(ids.first!) {
                         EntityInspector(store: store, entity: e)
                     } else {
-                        MultiInspector(store: store, count: ids.count)
+                        MultiInspector(store: store, count: ids.count, others: notes.count)
                     }
                 case .relationship(let id):
                     if let r = store.diagram.relationship(id), let p = store.diagram.entity(r.parent), let c = store.diagram.entity(r.child) {
@@ -24,6 +33,7 @@ struct Inspector: View {
                     }
                 case .domain(let id):
                     if let d = store.diagram.domain(id) { DomainInspector(store: store, domain: d) }
+                }
                 }
             }
             .padding(.bottom, 16)
@@ -229,6 +239,7 @@ struct DiagramInspector: View {
             }
             Toggle("Types", isOn: display(\.showTypes, "Show Types")).toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
             Toggle("Not null, unique, auto", isOn: display(\.showConstraints, "Show Constraints")).toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
+            Toggle("Lines hop over each other", isOn: display(\.lineJumps, "Change Lines")).toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
             Toggle("Hints on the canvas", isOn: $showHints).toggleStyle(.switch).controlSize(.small).font(.system(size: 12.5))
         }
         .foregroundStyle(MB.text)
@@ -1088,23 +1099,42 @@ struct DomainInspector: View {
 struct MultiInspector: View {
     @ObservedObject var store: DiagramStore
     let count: Int
+    /// Notes and shapes selected along with the entities.
+    var others = 0
+
+    private var title: String {
+        if count == 0 { return "\(others) things on the canvas" }
+        if others == 0 { return "\(count) entities" }
+        return "\(count) entities and \(others) more"
+    }
 
     var body: some View {
-        Heading(kind: "Selection", title: "\(count) entities")
-        Section(title: "Align") {
-            HStack(spacing: 2) {
-                MBIconButton(symbol: "align.horizontal.left", help: "Left edges") { store.align(.left) }
-                MBIconButton(symbol: "align.horizontal.center", help: "Centres") { store.align(.centre) }
-                MBIconButton(symbol: "align.horizontal.right", help: "Right edges") { store.align(.right) }
-                MBIconButton(symbol: "align.vertical.top", help: "Top edges") { store.align(.top) }
-                MBIconButton(symbol: "align.vertical.center", help: "Middles") { store.align(.middle) }
-                MBIconButton(symbol: "align.vertical.bottom", help: "Bottom edges") { store.align(.bottom) }
+        Heading(kind: "Selection", title: title)
+        if count > 1 {
+            Section(title: "Align") {
+                HStack(spacing: 2) {
+                    MBIconButton(symbol: "align.horizontal.left", help: "Left edges") { store.align(.left) }
+                    MBIconButton(symbol: "align.horizontal.center", help: "Centres") { store.align(.centre) }
+                    MBIconButton(symbol: "align.horizontal.right", help: "Right edges") { store.align(.right) }
+                    MBIconButton(symbol: "align.vertical.top", help: "Top edges") { store.align(.top) }
+                    MBIconButton(symbol: "align.vertical.center", help: "Middles") { store.align(.middle) }
+                    MBIconButton(symbol: "align.vertical.bottom", help: "Bottom edges") { store.align(.bottom) }
+                }
+                HStack(spacing: 8) {
+                    Button("Spread Across") { store.align(.spreadAcross) }.buttonStyle(.mbQuiet)
+                    Button("Spread Down") { store.align(.spreadDown) }.buttonStyle(.mbQuiet)
+                }
+                HStack(spacing: 8) {
+                    Button("Tidy Up Selection") { store.tidyUp() }.buttonStyle(.mbQuiet)
+                    Button("Same Width") { store.sameWidth() }.buttonStyle(.mbQuiet)
+                }
             }
+        }
+        Section(title: "On top of each other") {
             HStack(spacing: 8) {
-                Button("Spread Across") { store.align(.spreadAcross) }.buttonStyle(.mbQuiet)
-                Button("Spread Down") { store.align(.spreadDown) }.buttonStyle(.mbQuiet)
+                Button("To Front") { store.restack(toFront: true) }.buttonStyle(.mbQuiet)
+                Button("To Back") { store.restack(toFront: false) }.buttonStyle(.mbQuiet)
             }
-            Button("Tidy Up Selection") { store.tidyUp() }.buttonStyle(.mbQuiet)
         }
         Section(title: "") {
             HStack(spacing: 8) {

@@ -111,7 +111,13 @@ public enum AstaExport {
             let parent = domain.parent.flatMap { d.domain($0)?.name } ?? ""
             out.append("DOMAIN \(domain.name)|\(domain.columnTypeName)|\(base)|\(length)|nn=\(yes(domain.notNull))|\(domain.defaultValue)|\(parent)|\(domain.definition)")
         }
-        out.append("DIAGRAM \(d.display.notation == .ie ? "IE" : "IDEF1X")|\(d.display.names == .physical ? "Physical Model" : "Logical Model")|boxes=\(d.entities.count)|lines=\(d.relationships.count)")
+        // What is on the canvas beside the model: notes, the ones that are about something, text (a shape's label is
+        // text too), and rectangles and straight lines.
+        let notes = d.annotations.filter { $0.kind == .note }
+        let texts = d.annotations.filter { $0.kind == .text || ($0.kind == .rectangle && !$0.text.isEmpty) }.count
+        let shapes = d.annotations.filter { $0.kind == .rectangle || (($0.kind == .line || $0.kind == .arrow) && $0.points.count >= 2) }.count
+        out.append("DIAGRAM \(d.display.notation == .ie ? "IE" : "IDEF1X")|\(d.display.names == .physical ? "Physical Model" : "Logical Model")|boxes=\(d.entities.count)|lines=\(d.relationships.count)"
+                   + "|notes=\(notes.count)|about=\(notes.filter { $0.entity != nil }.count)|texts=\(texts)|shapes=\(shapes)")
         return out.joined(separator: "\n") + "\n"
     }
 
@@ -156,7 +162,7 @@ public enum AstaExport {
     }
 
     /// The fill Astah gives an entity for each colour tag: its own pale tints.
-    static func fill(_ color: EntityColor) -> String? {
+    public static func fill(_ color: EntityColor) -> String? {
         switch color {
         case .none: nil
         case .red: "#FF9999"
@@ -192,10 +198,12 @@ final class AstaBuilder {
         "UModelImp", "UPackageImp", "UClassifierImp", "EREntityImp", "ERAttributeImp", "ERIndexImp", "ERRelationshipImp",
         "ERRelationshipEndImp", "ERSubtypeRelationshipImp", "UConstraintImp", "UElementOwnershipImp", "UTaggedValueImp",
         "UERDiagramImp", "EREntityPresentation", "ERRelationshipPresentation", "ERSubtypeRelationshipPresentation", "TextPresentation",
+        "UCommentImp", "NotePresentation", "NoteAnchorPresentation", "RectPresentation", "LinePresentation",
     ]
     /// Astah saves these as "not changed"; everything else as changed. Kept as it writes them.
     private static let unchanged: Set<String> = [
         "EREntityImp", "EREntityPresentation", "ERRelationshipImp", "ERSubtypeRelationshipImp", "UBooleanExpression", "UExpression",
+        "UCommentImp", "NotePresentation",
     ]
     private static let observable = "JP.co.esm.caddies.uml.util.ExObservable"
 
@@ -684,7 +692,7 @@ final class AstaBuilder {
             relationshipObjects[r.id] = relationship
         }
 
-        draw(in: schema, entityObjects, relationshipObjects)
+        draw(in: schema, entityObjects, relationshipObjects, attributeObjects)
 
         let info = make("ModelManageInfo")
         info["lastModifiedTime"] = .long(Int64(options.date.timeIntervalSince1970 * 1000))
@@ -737,7 +745,7 @@ final class AstaBuilder {
         return (width, height)
     }
 
-    private func draw(in schema: JObject, _ entities: [UUID: JObject], _ relationships: [UUID: JObject]) {
+    private func draw(in schema: JObject, _ entities: [UUID: JObject], _ relationships: [UUID: JObject], _ attributes: [UUID: JObject]) {
         let display = diagram.display
         let sheet = named("UERDiagramImp", options.diagramName)
         own(schema, sheet)
@@ -759,8 +767,18 @@ final class AstaBuilder {
         }
         stretch = min(stretch, 1.6)
 
+        // Astah draws what was made later on top: the shapes that lie under the entities go first.
         var depth: Int32 = 0
         var boxes: [UUID: JObject] = [:]
+        for a in diagram.annotations where a.kind == .rectangle {
+            depth -= 1
+            let shape = make("RectPresentation")
+            place(shape, on: sheet, depth: depth, Rect(a.x * stretch, a.y, a.width * stretch, a.height))
+            var look = [("fill.color.alpha", "FF"), ("fill.color", a.style.fill.isEmpty ? "#FFFFFF" : a.style.fill.uppercased())]
+            if !a.style.fill.isEmpty { look.append(("isfilled.color", "true")) }
+            if !a.style.line.isEmpty { look.append(("line.color", a.style.line.uppercased())) }
+            shape["styleMap"] = map(look)
+        }
         let dependent = diagram.dependentEntities
         for e in diagram.entities {
             guard let model = entities[e.id], let drawn = frame(of: e.id), let size = sizes[e.id] else { continue }
@@ -812,8 +830,10 @@ final class AstaBuilder {
             line["sourceEndY"] = .double(path.source.1)
             line["targetEndX"] = .double(path.target.0)
             line["targetEndY"] = .double(path.target.1)
+            // Square corners where the app found the way; a line you bent yourself keeps its own angles.
             var look: [(String, String)] = []
-            if !path.bends.isEmpty { look.append(("line.shape", "line_right_angle")) }
+            if r.shape == .curved { look.append(("line.shape", "curve")) }
+            else if !path.bends.isEmpty, r.waypoints.isEmpty { look.append(("line.shape", "line_right_angle")) }
             if !r.style.line.isEmpty { look.append(("line.color", r.style.line.uppercased())) }
             if !look.isEmpty { line["styleMap"] = map(look) }
             if r.kind == .subtype {
@@ -840,6 +860,101 @@ final class AstaBuilder {
             append(line, to: sheet, "presentation")
             observe(model, by: line)
         }
+
+        // What lies on top: notes (with the line to what they are about), text and straight lines. Astah has
+        // no place for a drawing by hand, an oval or a picture from here, so those stay behind.
+        for a in diagram.annotations {
+            let frame = Rect((a.x + a.width / 2) * stretch - a.width / 2, a.y, a.width, a.height)
+            switch a.kind {
+            case .note:
+                let comment = named("UCommentImp", "")
+                comment["body"] = .string(a.text)
+                append(schema, to: comment, "annotatedElement")
+                append(comment, to: schema, "annotatedElementInv")
+                depth -= 1
+                let note = make("NotePresentation")
+                place(note, on: sheet, depth: depth, frame)
+                note["model"] = .object(comment)
+                note["label"] = .string("")
+                // It keeps the size it was given here.
+                note["doAutoResize"] = .bool(false)
+                var look = [("fill.color.alpha", "FF"), ("fill.color", a.style.fill.isEmpty ? "#FFFFCC" : a.style.fill.uppercased())]
+                if !a.style.fill.isEmpty { look.append(("isfilled.color", "true")) }
+                note["styleMap"] = map(look)
+                append(note, to: comment, "presentation")
+                observe(comment, by: note)
+                // About an entity, or one attribute of it: Astah's note anchor.
+                guard let id = a.entity, let box = boxes[id], let body = bodies[id], let entity = entities[id] else { continue }
+                let target = a.attribute.flatMap { attributes[$0] } ?? entity
+                append(target, to: comment, "annotatedElement")
+                append(comment, to: target, "annotatedElementInv")
+                depth -= 1
+                let anchor = make("NoteAnchorPresentation")
+                anchor["diagram"] = .object(sheet)
+                anchor["depth"] = .int(depth)
+                anchor["changeId"] = .object(long(3))
+                anchor["annotatedElement"] = .object(target)
+                append(note, to: anchor, "servers")
+                append(box, to: anchor, "servers")
+                let from = Point(frame.midX, frame.midY), to = Point(body.midX, body.midY)
+                anchor["allPoints"] = points([from, to])
+                anchor["outerPoints"] = points([from, to])
+                anchor["points"] = points([])
+                let label = make("LabelPresentation")
+                label["compositeParent"] = .object(anchor)
+                label["changeId"] = .object(long(-1))
+                label["location"] = .object(point("Pnt2d", (from.x + to.x) / 2, (from.y + to.y) / 2))
+                label["width"] = .double(11.203125)
+                label["height"] = .double(14.1328125)
+                label["label"] = .string("")
+                anchor["namePresentation"] = .object(label)
+                append(anchor, to: note, "clients")
+                append(anchor, to: box, "clients")
+                observe(note, by: anchor)
+                observe(box, by: anchor)
+                append(anchor, to: sheet, "presentation")
+            case .text, .rectangle:
+                // A shape's label is a line of text in its corner.
+                guard a.kind == .text || !a.text.isEmpty else { continue }
+                depth -= 1
+                let text = make("TextPresentation")
+                let at = a.kind == .text ? frame : Rect(a.x * stretch + 6, a.y + 4, min(max(40, a.width - 12), Double(a.text.count) * 7.4 + 12), 22)
+                place(text, on: sheet, depth: depth, at)
+                text["label"] = .string(a.text)
+                text["text"] = .string(a.text)
+                var look = [("fill.color.alpha", "FF"), ("fill.color", "#FFFFCC")]
+                if !a.style.text.isEmpty { look.append(("font.color", a.style.text.uppercased())) }
+                if a.size > 0 { look.append(("font.size", "\(Int(a.size))")) }
+                text["styleMap"] = map(look)
+            case .line, .arrow:
+                guard a.points.count >= 2 else { continue }
+                depth -= 1
+                let line = make("LinePresentation")
+                line["diagram"] = .object(sheet)
+                line["depth"] = .int(depth)
+                line["changeId"] = .object(long(3))
+                line["location"] = .object(point("Pnt2d", a.points[0].x * stretch, a.points[0].y))
+                line["localMovement"] = .object(point("Vec2d", (a.points[1].x - a.points[0].x) * stretch, a.points[1].y - a.points[0].y))
+                let color = bare("Color")
+                color["value"] = .int(-1)
+                line["baseColor"] = .object(color)
+                if !a.style.line.isEmpty { line["styleMap"] = map([("line.color", a.style.line.uppercased())]) }
+                append(line, to: sheet, "presentation")
+            default:
+                continue
+            }
+        }
+    }
+
+    /// Puts a box-shaped thing (a note, text, a rectangle) on the diagram.
+    private func place(_ o: JObject, on sheet: JObject, depth: Int32, _ frame: Rect) {
+        o["diagram"] = .object(sheet)
+        o["depth"] = .int(depth)
+        o["changeId"] = .object(long(3))
+        o["location"] = .object(point("Pnt2d", frame.x, frame.y))
+        o["width"] = .double(frame.width)
+        o["height"] = .double(frame.height)
+        append(o, to: sheet, "presentation")
     }
 
     /// How far everything is moved apart sideways (see `draw`).
@@ -891,6 +1006,11 @@ final class AstaBuilder {
         let source = end(first, drawn[1], drawn: fromFrame, body: a)
         let target = end(last, drawn[drawn.count - 2], drawn: toFrame, body: b)
         var bends = drawn.dropFirst().dropLast().map { Point($0.x * stretch, $0.y) }
+        if !r.waypoints.isEmpty || r.shape == .straight {
+            // Your own points, or a straight line: from the middle of one box to the middle of the other, as it is.
+            let start = Point(a.midX, a.midY), end = Point(b.midX, b.midY)
+            return Path(start: start, end: end, bends: bends, leaves: source.edge, enters: target.edge, source: (0.5, 0.5), target: (0.5, 0.5))
+        }
         if bends.isEmpty {
             // A straight line here. Astah's boxes have other heights, so the two ends may no longer be level:
             // then it gets the step in the middle that a line between two rows has.

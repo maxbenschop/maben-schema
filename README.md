@@ -39,17 +39,23 @@ Bug reports and ideas are welcome as [issues](https://github.com/maxbenschop/mab
 
 **Other names, tags and links.** An entity, an attribute and a domain can have two other names (another language, say), tags (`owner = sales`) and web links. Entities can be put in groups, which the entity list shows as folders.
 
-**Finding and arranging.** ⌘K finds an entity, an attribute or a command. Tidy Up (⌃⌘L) lays the diagram out with parents above children; several selected entities can be aligned and spread. Positions snap to a 10-point grid (hold ⌘ to place freely). Colour tags per entity.
+**Finding and arranging.** ⌘K finds an entity, an attribute or a command; Find and Replace (⌥⌘F) changes a text in every name at once. Tidy Up (⌃⌘L) lays the diagram out with parents above children; several selected entities can be aligned and spread. Positions land on a grid (hold ⌘ to place freely): Settings has whether it shows, its step (5, 10 or 20 points) and whether things snap to it. The map (⌥⌘M) shows the whole diagram small, with the part you are looking at; click in it to go there. Colour tags per entity.
+
+**Notes, shapes and drawings.** The strip at the top of the canvas has a tool for each: a note (which can be about an entity or one attribute, with a thin line to it), a line of text, a rectangle or oval (a box around a group of entities, with a label), a line or arrow, a drawing by hand, a highlighter, and a picture (also by dropping or pasting one). Pick a tool, click or drag, and it hands back to the pointer. They move, resize, copy and stack like everything else, and are not part of the model: nothing of them reaches the SQL.
+
+**Your own look.** Under Look in the inspector an entity gets its own fill, border and text colour, shows more or less than the rest of the diagram (everything, keys only, its name only) and can hide single attributes. Drag its bottom right corner to make it wider; Make the Same Width evens out a selection. Copy Colours and Paste Colours (⌥⌘C, ⌥⌘V) take a look from one thing to others. Bring to Front and Send to Back (⇧⌘], ⇧⌘[) decide what lies on top.
+
+**Lines your way.** Drag a line and a point is put in it there: the line now goes through your points (drag a point to move it, double-click to take it out). A line can also be straight or curved, in its own colour, with its name or its "how many" hidden. Lines can hop over each other where they cross. Find Every Line's Way Again puts them back.
 
 **Problems.** A chip on the canvas counts what would go wrong in a database (no primary key, two attributes with one name, a relationship to an entity without a key) and takes you there.
 
 **Out.** Export Image (PNG at 2×, or PDF; light or dark; with or without a background), Copy Diagram as Image (⇧⌘C) for a report, and a data dictionary as Markdown or CSV.
 
-**To Astah.** File › Export for Astah writes an `.asta` file that Astah Professional opens as an ER model with one ER diagram: the same entities, attributes, keys, types, lengths, defaults, domains and relationships, in the same places, with the lines bent where they bent and the notation that was showing. Astah can go on working in it. Subtypes, indexes, kinds of entity, domains under domains, both names of a relationship and the other names and tags go along as what Astah calls them. A type Astah doesn't start with (`INTEGER`, `TEXT`, `UUID`) is added to its data types under the same name; unique becomes a unique index, which Astah shows as an alternate key; what Astah has no place for (counts up by itself, the rules on delete and update) goes along as tagged values. Astah sizes its boxes itself and writes more in them, so everything is set a little further apart sideways to keep the lines clear.
+**To Astah.** File › Export for Astah writes an `.asta` file that Astah Professional opens as an ER model with one ER diagram: the same entities, attributes, keys, types, lengths, defaults, domains and relationships, in the same places, with the lines bent where they bent and the notation that was showing. Astah can go on working in it. Subtypes, indexes, kinds of entity, domains under domains, both names of a relationship and the other names and tags go along as what Astah calls them. A type Astah doesn't start with (`INTEGER`, `TEXT`, `UUID`) is added to its data types under the same name; unique becomes a unique index, which Astah shows as an alternate key; what Astah has no place for (counts up by itself, the rules on delete and update) goes along as tagged values. Notes (with what they are about), text, rectangles and straight lines go along too; a drawing by hand, an oval and a picture don't, as there is no way to hand those to Astah. Astah sizes its boxes itself and writes more in them, so everything is set a little further apart sideways to keep the lines clear.
 
 **Files.** A diagram is a `.mschema` file: readable JSON with a stable key order, so it diffs in git. Standard Mac documents: saves by itself, Open Recent, Revert, undo for every change.
 
-**Settings** (⌘,): light, dark or follow the system; the notation and database new diagrams start with; hints on the canvas; updates.
+**Settings** (⌘,): light, dark or follow the system; the notation and database new diagrams start with; hints, the map and the grid on the canvas; updates.
 
 ## Keys
 
@@ -63,7 +69,11 @@ Bug reports and ideas are welcome as [issues](https://github.com/maxbenschop/mab
 | Arrow keys | Move the selected entities 10 points (⇧: 50) |
 | ⌫ | Delete what is selected |
 | ⌘D, ⌘C, ⌘V | Duplicate, copy, paste (entities, or CREATE TABLE text) |
-| ⌘K | Find |
+| ⌘K, ⌥⌘F | Find, find and replace |
+| ⌥⌘C, ⌥⌘V | Copy colours, paste colours |
+| ⇧⌘], ⇧⌘[ | Bring to front, send to back |
+| ⌥⌘M, ⌘', ⇧⌘' | Map, grid, snap to grid |
+| esc | Back to the pointer; nothing selected |
 | ⌥⌘S, ⌥⌘I, ⌃⌘S | SQL, inspector, entity list |
 | ⌘+, ⌘−, ⌘0, ⌘1 | Zoom in, out, actual size, fit. Pinch, or ⌘-scroll, zooms at the pointer |
 | Space-drag, two-finger scroll | Pan |

@@ -5,6 +5,9 @@ import SchemaCore
 struct RenderState {
     var selection: Selection = .none
     var selectedAttribute: UUID?
+    var selectedAnnotations: Set<UUID> = []
+    /// The note whose text is being typed: its text is left out, the text field sits there.
+    var editingAnnotation: UUID?
     var hoverEntity: UUID?
     var hoverLink: UUID?
     var connectTarget: UUID?
@@ -25,10 +28,18 @@ enum Renderer {
     static func draw(_ scene: Scene, state: RenderState, background: NSColor) {
         let d = scene.diagram
         let visible = state.visible
+        // Shapes, pictures and highlighter go under everything; notes, text, lines and drawings on top.
+        for a in scene.annotations where a.annotation.kind.isBackground && (visible.map { a.frame.insetBy(dx: -20, dy: -20).intersects($0) } ?? true) {
+            draw(a, in: scene, state: state, background: background)
+        }
         for link in scene.links where visible.map({ scene.linkBounds(link).intersects($0) }) ?? true {
             draw(link, in: scene, state: state, background: background)
         }
+        if d.display.lineJumps, !state.namesOnly, scene.links.count <= 600 { drawJumps(scene, state: state, background: background) }
         for box in scene.boxes where visible.map({ box.frame.intersects($0) }) ?? true { draw(box, in: d, state: state) }
+        for a in scene.annotations where !a.annotation.kind.isBackground && (visible.map { a.frame.insetBy(dx: -20, dy: -20).intersects($0) } ?? true) {
+            draw(a, in: scene, state: state, background: background)
+        }
         // A name too long for the gap it sits in only shows for the line you point at or select, on top.
         for link in scene.links where state.selection.relationship == link.id || state.hoverLink == link.id {
             let active = state.selection.relationship == link.id || state.hoverLink == link.id
@@ -43,9 +54,182 @@ enum Renderer {
             guard let box = scene.box(id), state.editing == nil || id != state.selection.singleEntity else { continue }
             for p in box.handles { handle(at: p, zoom: state.zoom, background: background) }
         }
-        if let s = state.selection.singleEntity, let box = scene.box(s), state.editing == nil, d.display.level == .all {
-            addButton(box.addButton)
+        if let s = state.selection.singleEntity, let box = scene.box(s), state.editing == nil {
+            if (box.entity.level ?? d.display.level) == .all { addButton(box.addButton) }
+            grip(box.resizeGrip)
         }
+        // The points you put in the selected line: squares to drag.
+        if let id = state.selection.relationship, let link = scene.link(id), link.manual {
+            for p in link.points.dropFirst().dropLast() { square(at: p, zoom: state.zoom, background: background) }
+        }
+        // One selected note or shape: its corners (or its two ends) to drag.
+        if state.selectedAnnotations.count == 1, state.selection.entityIDs.isEmpty, let id = state.selectedAnnotations.first, let a = scene.annotation(id), state.editingAnnotation == nil {
+            switch a.annotation.kind {
+            case .line, .arrow: for p in a.points { square(at: p, zoom: state.zoom, background: background) }
+            case .freehand, .highlighter: break
+            default: for p in a.corners { square(at: p, zoom: state.zoom, background: background) }
+            }
+        }
+    }
+
+    // MARK: Notes, text, shapes and drawings
+
+    static let noteFill = MB.dyn(MB.rgb(0x3A3520), MB.rgb(0xFFF6BF))
+    static let noteFont = NSFont.systemFont(ofSize: 12)
+    private static var pictures: [String: NSImage] = [:]
+
+    static func font(for a: Annotation) -> NSFont {
+        a.size > 0 ? NSFont.systemFont(ofSize: CGFloat(a.size)) : noteFont
+    }
+
+    static func draw(_ box: AnnotationBox, in scene: Scene, state: RenderState, background: NSColor) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let a = box.annotation
+        let frame = box.frame
+        let selected = state.selectedAnnotations.contains(a.id)
+        let line = NSColor(hex: a.style.line)
+        let ink = NSColor(hex: a.style.text) ?? MB.nsText
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+        switch a.kind {
+        case .note:
+            // What it is about: a thin dashed line to the entity, or to the attribute's line in it.
+            if let id = a.entity, let target = scene.box(id) {
+                let to = a.attribute.flatMap { target.row(for: $0)?.rect } ?? target.frame
+                let from = CGPoint(x: frame.midX, y: frame.midY)
+                let end = CGPoint(x: min(max(from.x, to.minX), to.maxX), y: min(max(from.y, to.minY), to.maxY))
+                ctx.setStrokeColor((line ?? MB.nsDim).cgColor)
+                ctx.setLineWidth(1)
+                ctx.setLineDash(phase: 0, lengths: [3, 3])
+                ctx.move(to: from); ctx.addLine(to: end); ctx.strokePath()
+                ctx.setLineDash(phase: 0, lengths: [])
+            }
+            let fold: CGFloat = 10
+            let path = NSBezierPath()
+            path.move(to: CGPoint(x: frame.minX, y: frame.minY))
+            path.line(to: CGPoint(x: frame.maxX - fold, y: frame.minY))
+            path.line(to: CGPoint(x: frame.maxX, y: frame.minY + fold))
+            path.line(to: CGPoint(x: frame.maxX, y: frame.maxY))
+            path.line(to: CGPoint(x: frame.minX, y: frame.maxY))
+            path.close()
+            (NSColor(hex: a.style.fill) ?? noteFill).setFill()
+            path.fill()
+            (line ?? MB.nsLineStrong).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            let corner = NSBezierPath()
+            corner.move(to: CGPoint(x: frame.maxX - fold, y: frame.minY))
+            corner.line(to: CGPoint(x: frame.maxX - fold, y: frame.minY + fold))
+            corner.line(to: CGPoint(x: frame.maxX, y: frame.minY + fold))
+            corner.stroke()
+            if state.editingAnnotation != a.id { wrapped(a.text, in: frame.insetBy(dx: 8, dy: 6), font: font(for: a), color: NSColor(hex: a.style.text) ?? MB.dyn(MB.rgb(0xF5F5F5), MB.rgb(0x111113))) }
+        case .text:
+            if let fill = NSColor(hex: a.style.fill) { fill.withAlphaComponent(0.25).setFill(); frame.fill(using: .sourceOver) }
+            if state.editingAnnotation != a.id { wrapped(a.text.isEmpty ? "Text" : a.text, in: frame.insetBy(dx: 2, dy: 2), font: font(for: a), color: a.text.isEmpty ? MB.nsDim : ink) }
+        case .rectangle, .oval:
+            let path = a.kind == .oval ? NSBezierPath(ovalIn: frame) : NSBezierPath(roundedRect: frame, xRadius: 6, yRadius: 6)
+            if let fill = NSColor(hex: a.style.fill) { fill.withAlphaComponent(0.22).setFill(); path.fill() }
+            (line ?? MB.nsDim).setStroke()
+            path.lineWidth = 1.25
+            path.stroke()
+            if !a.text.isEmpty, state.editingAnnotation != a.id {
+                text(a.text, at: CGPoint(x: frame.minX + 8, y: frame.minY + 6), font: NSFont.systemFont(ofSize: a.size > 0 ? CGFloat(a.size) : 11.5, weight: .semibold), color: NSColor(hex: a.style.text) ?? MB.nsMuted)
+            }
+        case .line, .arrow:
+            let pts = box.points
+            guard pts.count >= 2 else { return }
+            ctx.setStrokeColor((line ?? MB.nsMuted).cgColor)
+            ctx.setLineWidth(1.5)
+            ctx.setLineCap(.round)
+            ctx.move(to: pts[0]); ctx.addLine(to: pts[1]); ctx.strokePath()
+            if a.kind == .arrow {
+                let angle = atan2(pts[1].y - pts[0].y, pts[1].x - pts[0].x)
+                for turn in [CGFloat.pi * 0.84, -CGFloat.pi * 0.84] {
+                    ctx.move(to: pts[1])
+                    ctx.addLine(to: CGPoint(x: pts[1].x + cos(angle + turn) * 10, y: pts[1].y + sin(angle + turn) * 10))
+                }
+                ctx.strokePath()
+            }
+        case .freehand, .highlighter:
+            let pts = box.points
+            guard pts.count >= 2 else { return }
+            let marker = a.kind == .highlighter
+            ctx.setStrokeColor((line ?? (marker ? MB.rgb(0xFFD23F) : MB.nsMuted)).withAlphaComponent(marker ? 0.38 : 1).cgColor)
+            ctx.setLineWidth(marker ? 14 : 1.75)
+            ctx.setLineCap(.round)
+            ctx.setLineJoin(.round)
+            ctx.move(to: pts[0])
+            for p in pts.dropFirst() { ctx.addLine(to: p) }
+            ctx.strokePath()
+        case .image:
+            var picture = pictures[a.image.isEmpty ? "" : "\(a.id)\(a.image.count)"]
+            if picture == nil, let data = Data(base64Encoded: a.image), let made = NSImage(data: data) {
+                if pictures.count > 40 { pictures.removeAll() }
+                pictures["\(a.id)\(a.image.count)"] = made
+                picture = made
+            }
+            if let picture {
+                picture.draw(in: frame, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            } else {
+                MB.nsWash(0.06).setFill(); frame.fill(using: .sourceOver)
+                text("Picture", at: CGPoint(x: frame.minX + 8, y: frame.minY + 6), font: Metrics.labelFont, color: MB.nsDim)
+            }
+        }
+        if selected, state.interactive {
+            MB.nsAccentInk.setStroke()
+            let mark = NSBezierPath(roundedRect: frame.insetBy(dx: -3, dy: -3), xRadius: 4, yRadius: 4)
+            mark.lineWidth = 1.25
+            mark.stroke()
+        }
+    }
+
+    /// Text that wraps inside a rectangle, cut off at its bottom edge.
+    static func wrapped(_ s: String, in rect: CGRect, font: NSFont, color: NSColor) {
+        guard !s.isEmpty, rect.width > 4, rect.height > 4 else { return }
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byWordWrapping
+        (s as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: [.font: font, .foregroundColor: color, .paragraphStyle: style])
+    }
+
+    /// How tall a text gets when it wraps at a width.
+    static func height(of s: String, width: CGFloat, font: NSFont) -> CGFloat {
+        ceil((s as NSString).boundingRect(with: CGSize(width: width, height: 10_000), options: [.usesLineFragmentOrigin], attributes: [.font: font]).height)
+    }
+
+    // MARK: Where lines cross
+
+    /// One line hops over the other where they cross: the one going across gets a small arch.
+    static func drawJumps(_ scene: Scene, state: RenderState, background: NSColor) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        struct Piece { let link: Int; let a: CGPoint; let b: CGPoint }
+        var across: [Piece] = [], down: [Piece] = []
+        for (i, link) in scene.links.enumerated() where !link.curved {
+            if let v = state.visible, !scene.linkBounds(link).intersects(v) { continue }
+            for (a, b) in zip(link.points, link.points.dropFirst()) {
+                if abs(a.y - b.y) < 0.5, abs(a.x - b.x) > 14 { across.append(Piece(link: i, a: a.x < b.x ? a : b, b: a.x < b.x ? b : a)) }
+                else if abs(a.x - b.x) < 0.5, abs(a.y - b.y) > 14 { down.append(Piece(link: i, a: a.y < b.y ? a : b, b: a.y < b.y ? b : a)) }
+            }
+        }
+        guard !across.isEmpty, !down.isEmpty else { return }
+        func color(_ i: Int) -> NSColor {
+            let r = scene.links[i].relationship
+            return state.selection.relationship == r.id ? MB.nsAccentInk : NSColor(hex: r.style.line) ?? MB.nsWire
+        }
+        ctx.saveGState()
+        ctx.setLineWidth(1.25)
+        for h in across {
+            for v in down where v.link != h.link && v.a.x > h.a.x + 7 && v.a.x < h.b.x - 7 && h.a.y > v.a.y + 7 && h.a.y < v.b.y - 7 {
+                let c = CGPoint(x: v.a.x, y: h.a.y)
+                ctx.setFillColor(background.cgColor)
+                ctx.fill(CGRect(x: c.x - 5, y: c.y - 2.5, width: 10, height: 5))
+                ctx.setStrokeColor(color(v.link).cgColor)
+                ctx.move(to: CGPoint(x: c.x, y: c.y - 3)); ctx.addLine(to: CGPoint(x: c.x, y: c.y + 3)); ctx.strokePath()
+                ctx.setStrokeColor(color(h.link).cgColor)
+                ctx.addArc(center: c, radius: 5, startAngle: .pi, endAngle: 0, clockwise: false)
+                ctx.strokePath()
+            }
+        }
+        ctx.restoreGState()
     }
 
     // MARK: Entities
@@ -174,7 +358,17 @@ enum Renderer {
         }
         let clip = state.visible
         var travelled: CGFloat = 0
-        for i in 0..<(pts.count - 1) {
+        if link.curved, pts.count > 2 {
+            // One smooth line through the points: each bend is rounded all the way.
+            if dashed { ctx.setLineDash(phase: 0, lengths: [5, 4]) }
+            ctx.move(to: pts[0])
+            for i in 1..<(pts.count - 1) {
+                let next = i == pts.count - 2 ? pts[i + 1] : CGPoint(x: (pts[i].x + pts[i + 1].x) / 2, y: (pts[i].y + pts[i + 1].y) / 2)
+                ctx.addQuadCurve(to: next, control: pts[i])
+            }
+            ctx.strokePath()
+        }
+        for i in 0..<(pts.count - 1) where !(link.curved && pts.count > 2) {
             let a = pts[i], b = pts[i + 1]
             let length = hypot(b.x - a.x, b.y - a.y)
             guard length > 0 else { continue }
@@ -376,6 +570,33 @@ enum Renderer {
         path.lineWidth = 1.5
         path.fill()
         path.stroke()
+    }
+
+    /// A square to drag: a point in a line, or a corner of a note or shape.
+    static func square(at p: CGPoint, zoom: CGFloat, background: NSColor) {
+        let r = max(3.5, 4 / max(zoom, 0.6))
+        let rect = CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2)
+        background.setFill()
+        MB.nsAccentInk.setStroke()
+        let path = NSBezierPath(rect: rect)
+        path.lineWidth = 1.5
+        path.fill()
+        path.stroke()
+    }
+
+    /// The corner of the selected entity you drag to make it wider.
+    static func grip(_ rect: CGRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.saveGState()
+        ctx.setStrokeColor(MB.nsAccentInk.cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.setLineCap(.round)
+        for inset in [3, 7] as [CGFloat] {
+            ctx.move(to: CGPoint(x: rect.maxX - 2, y: rect.maxY - inset - 2))
+            ctx.addLine(to: CGPoint(x: rect.maxX - inset - 2, y: rect.maxY - 2))
+        }
+        ctx.strokePath()
+        ctx.restoreGState()
     }
 
     static func addButton(_ rect: CGRect) {

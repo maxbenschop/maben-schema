@@ -8,6 +8,10 @@ extension Diagram {
     public mutating func normalize() {
         let ids = Set(entities.map(\.id))
         relationships.removeAll { !ids.contains($0.parent) || !ids.contains($0.child) }
+        // A note about an entity that is gone is just a note.
+        for i in annotations.indices where annotations[i].entity != nil {
+            if let e = annotations[i].entity, !ids.contains(e) { annotations[i].entity = nil; annotations[i].attribute = nil }
+        }
 
         // An entity can't be part of its own key: a relationship to itself, or one that closes a circle of
         // identifying relationships, is made non-identifying.

@@ -82,11 +82,17 @@ public class AstahCheck {
         }
         for (INamedElement d : pa.findElements(IERDiagram.class)) {
             IERDiagram dg = (IERDiagram) d;
-            int boxes = 0, lines = 0;
+            int boxes = 0, lines = 0, notes = 0, anchors = 0, texts = 0, shapes = 0;
             for (IPresentation p : dg.getPresentations()) {
-                if (p instanceof ILinkPresentation) lines++; else if (p.getModel() instanceof IEREntity) boxes++;
+                String type = p.getType();
+                if (p.getModel() instanceof IEREntity) boxes++;
+                else if (p.getModel() instanceof IERRelationship || p.getModel() instanceof IERSubtypeRelationship) lines++;
+                else if ("Note".equals(type)) notes++;
+                else if ("NoteAnchor".equals(type)) anchors++;
+                else if ("Text".equals(type)) texts++;
+                else shapes++;
             }
-            out.println("DIAGRAM " + dg.getNotation() + "|" + dg.getModelType() + "|boxes=" + boxes + "|lines=" + lines);
+            out.println("DIAGRAM " + dg.getNotation() + "|" + dg.getModelType() + "|boxes=" + boxes + "|lines=" + lines + "|notes=" + notes + "|about=" + anchors + "|texts=" + texts + "|shapes=" + shapes);
         }
         out.close();
 

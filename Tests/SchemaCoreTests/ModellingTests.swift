@@ -228,4 +228,41 @@ final class ModellingTests: XCTestCase {
         let styles = try XCTUnwrap(all("UModelImp").first { text($0, "name") == "no_title" })["styleMap"].object?.items.compactMap(\.string) ?? []
         XCTAssertTrue(styles.contains("Lookup"), "a kind of your own is one of the project's entity types")
     }
+
+    func testNotesAndShapesAreKeptAndFollowTheirEntity() throws {
+        var d = Diagram()
+        let e = d.addEntity(named: "Person", at: Point(100, 100))
+        d.addAttribute(Attribute(name: "id", type: "INTEGER", isPrimaryKey: true), to: e)
+        var note = Annotation(kind: .note, x: 300, y: 100, width: 180, height: 60, text: "About the key")
+        note.entity = e
+        note.attribute = d.entity(e)!.attributes[0].id
+        var line = Annotation(kind: .arrow, points: [Point(10, 20), Point(110, 70)])
+        line.style.line = "#FF0000"
+        d.annotations = [note, line]
+        XCTAssertTrue(line.bounds == (10, 20, 100, 50))
+        line.move(by: 5, -5)
+        XCTAssertEqual(line.points, [Point(15, 15), Point(115, 65)])
+
+        let text = try XCTUnwrap(String(data: d.encoded(), encoding: .utf8))
+        XCTAssertTrue(text.contains("\"version\" : 2"), "a diagram with a note is not one the first release can keep")
+        XCTAssertEqual(try Diagram.decode(d.encoded()), d)
+        XCTAssertFalse(text.contains("\"image\""), "what a note doesn't use isn't written")
+
+        // In the Astah file: a note that points at the attribute, and a line.
+        let entries = try Zip.entries(of: AstaExport.data(for: d))
+        let reader = try JavaStreamReader(entries[0].data, headerLength: 4)
+        _ = try reader.readAll()
+        func all(_ short: String) -> [JObject] { reader.objects.filter { $0.cls.shortName == short } }
+        XCTAssertEqual(all("UCommentImp").first?["body"].string, "About the key")
+        XCTAssertEqual(all("NoteAnchorPresentation").first?["annotatedElement"].object?.cls.shortName, "ERAttributeImp")
+        XCTAssertEqual(all("LinePresentation").count, 1)
+        XCTAssertTrue(AstaExport.manifest(for: d).contains("notes=1|about=1|texts=0|shapes=1"))
+
+        // The entity goes: the note stays, about nothing.
+        d.remove(entities: [e])
+        d.normalize()
+        XCTAssertEqual(d.annotations.count, 2)
+        XCTAssertNil(d.annotations[0].entity)
+        XCTAssertNil(d.annotations[0].attribute)
+    }
 }

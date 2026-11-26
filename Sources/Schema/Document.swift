@@ -159,6 +159,24 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         store.edit("Change Database") { $0.dialect = v }
     }
 
+    @objc func addAnnotation(_ sender: Any?) {
+        guard let raw = (sender as? NSMenuItem)?.representedObject as? String, let tool = Tool(rawValue: raw) else { return }
+        // A note or a line of text appears at once; the others are drawn on the canvas with the pointer.
+        if tool == .note || tool == .text { store.newNote(tool == .note ? .note : .text) } else { store.tool = tool }
+    }
+    @objc func addPicture(_ sender: Any?) { store.chooseImage() }
+    @objc func sameWidth(_ sender: Any?) { store.sameWidth() }
+    @objc func bringToFront(_ sender: Any?) { store.restack(toFront: true) }
+    @objc func sendToBack(_ sender: Any?) { store.restack(toFront: false) }
+    @objc func toggleLineJumps(_ sender: Any?) { store.edit("Change Lines") { $0.display.lineJumps.toggle() } }
+    @objc func rerouteAll(_ sender: Any?) { store.rerouteAll() }
+    @objc func copyStyle(_ sender: Any?) { store.copyStyle() }
+    @objc func pasteStyle(_ sender: Any?) { store.pasteStyle() }
+    @objc func showReplace(_ sender: Any?) { store.sheet = .replace }
+    @objc func toggleMap(_ sender: Any?) { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "showMap"), forKey: "showMap") }
+    @objc func toggleGrid(_ sender: Any?) { Grid.show.toggle() }
+    @objc func toggleSnap(_ sender: Any?) { Grid.snaps.toggle() }
+
     // MARK: View menu
 
     @objc func toggleSidebar(_ sender: Any?) { store.showSidebar.toggle() }
@@ -175,8 +193,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         switch item.action {
         case #selector(addAttribute(_:)): return store.selection.singleEntity != nil
         case #selector(renameSelection(_:)): return store.selection.singleEntity != nil || store.selection.relationship != nil
-        case #selector(duplicateSelection(_:)): return !store.selection.entityIDs.isEmpty
-        case #selector(alignSelection(_:)): return store.selection.entityIDs.count > 1
+        case #selector(duplicateSelection(_:)): return !store.selection.entityIDs.isEmpty || !store.selectedAnnotations.isEmpty
+        case #selector(alignSelection(_:)), #selector(sameWidth(_:)): return store.selection.entityIDs.count > 1
+        case #selector(bringToFront(_:)), #selector(sendToBack(_:)): return store.canArrange
+        case #selector(copyStyle(_:)): return store.canCopyStyle
+        case #selector(pasteStyle(_:)): return store.canPasteStyle
+        case #selector(toggleLineJumps(_:)): item.state = d.display.lineJumps ? .on : .off
+        case #selector(rerouteAll(_:)): return d.relationships.contains { !$0.waypoints.isEmpty }
+        case #selector(toggleMap(_:)): item.title = UserDefaults.standard.bool(forKey: "showMap") ? "Hide Map" : "Show Map"
+        case #selector(toggleGrid(_:)): item.title = Grid.show ? "Hide Grid" : "Show Grid"
+        case #selector(toggleSnap(_:)): item.state = Grid.snaps ? .on : .off
+        case #selector(showReplace(_:)): return !d.entities.isEmpty
         case #selector(tidyUp(_:)), #selector(exportSQL(_:)), #selector(exportImage(_:)), #selector(copyImage(_:)), #selector(exportDictionary(_:)),
              #selector(exportAstah(_:)):
             return !d.entities.isEmpty

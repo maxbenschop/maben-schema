@@ -176,7 +176,7 @@ java.util.ArrayList 8683452581122892189 3 -
  L nameFont Ljava/awt/Font; null
  L subElements Ljava/util/List; list
 ~jomt.jmodel.LabelPresentation -5404483991848190661 2 ~jomt.jmodel.RectPresentation
- Z doAutoResize - p:true
+ Z doAutoResize - !p:true
  Z visibility - !p:true
  L label Ljava/lang/String; !
 ~jomt.jmodel.RectPresentation -582497952433499079 2 ~jomt.jmodel.JomtPresentation
@@ -319,5 +319,23 @@ java.awt.geom.Point2D$Double 6150783262733311327 2 -
 ~jomt.jmodel.TextPresentation -8871990796453639829 2 ~jomt.jmodel.LabelPresentation
  L text Ljava/lang/String; !
 java.util.HashSet -5024744406713321676 3 -
+~jomt.jmodel.NoteAnchorPresentation 8648616591812293013 2 ~jomt.jmodel.BinaryRelationPresentation
+ L annotatedElement L~/uml/Foundation/Core/UModelElement; !
+~uml.Foundation.Core.UCommentImp -8993269414381549519 2 ~uml.Foundation.Core.UModelElementImp
+ L annotatedElement Ljava/util/List; list
+ L body Ljava/lang/String; !
+~jomt.jmodel.NotePresentation 4694203944709468171 2 ~jomt.jmodel.LabelPresentation
+~jomt.jmodel.LinePresentation -582497952433499079 2 ~jomt.jmodel.JomtPresentation
+ I bodyColor - p:0
+ I lineEndArrow - p:-1
+ I lineStartArrow - p:-1
+ I lineType - p:-1
+ L baseColor Ljava/awt/Color; !
+java.awt.Color 118526816881161077 2 -
+ F falpha - p:0.0
+ I value - p:-1
+ L cs Ljava/awt/color/ColorSpace; null
+ [ frgbvalue [F null
+ [ fvalue [F null
 """#
 }
