@@ -683,12 +683,112 @@ enum Picture {
     }
 
     static func png(_ scene: Scene, dark: Bool, transparent: Bool, scale: CGFloat = 2) -> Data? {
-        let view = View(scene: scene, transparent: transparent, scale: scale)
+        bitmap(scene, dark: dark, transparent: transparent, scale: scale)?.representation(using: .png, properties: [:])
+    }
+
+    /// A JPEG has no see-through: it always gets the background.
+    static func jpeg(_ scene: Scene, dark: Bool, scale: CGFloat = 2) -> Data? {
+        bitmap(scene, dark: dark, transparent: false, scale: scale)?.representation(using: .jpeg, properties: [.compressionFactor: 0.9])
+    }
+
+    /// The diagram as dots: `scale` of them per point each way, whatever screen the Mac has.
+    private static func bitmap(_ scene: Scene, dark: Bool, transparent: Bool, scale: CGFloat) -> NSBitmapImageRep? {
+        let view = View(scene: scene, transparent: transparent)
         view.appearance = appearance(dark: dark)
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        // Sized in points, so it pastes at the size it has on the canvas.
-        rep.size = NSSize(width: view.bounds.width / scale, height: view.bounds.height / scale)
-        return rep.representation(using: .png, properties: [:])
+        let size = view.bounds.size
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int((size.width * scale).rounded()), pixelsHigh: Int((size.height * scale).rounded()),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        // Sized in points, so it pastes at the size it has on the canvas, and the drawing is scaled to the dots.
+        rep.size = size
+        view.displayIgnoringOpacity(view.bounds, in: context)
+        return rep
+    }
+
+    // MARK: Paper
+
+    /// The diagram on paper: on one page, made to fit, or at its own size over as many pages as it takes, with the
+    /// title, the date and the page number in the margins when asked.
+    final class PrintView: NSView {
+        let scene: Scene
+        let title: String
+        let area: CGRect
+        var fit: Bool
+        var marks: Bool
+        private var page = NSSize(width: 500, height: 700)
+        private var columns = 1, rows = 1
+        private var scale: CGFloat = 1
+
+        init(scene: Scene, title: String, fit: Bool, marks: Bool) {
+            self.scene = scene
+            self.title = title
+            self.fit = fit
+            self.marks = marks
+            area = (scene.bounds() ?? CGRect(x: 0, y: 0, width: 400, height: 240)).insetBy(dx: -20, dy: -20).integral
+            super.init(frame: CGRect(origin: .zero, size: area.size))
+            appearance = Picture.appearance(dark: false)
+        }
+
+        required init?(coder: NSCoder) { fatalError() }
+        override var isFlipped: Bool { true }
+
+        /// Works out the pages for the paper in use.
+        func layout(for info: NSPrintInfo) {
+            let room = NSSize(width: info.paperSize.width - info.leftMargin - info.rightMargin, height: info.paperSize.height - info.topMargin - info.bottomMargin)
+            page = NSSize(width: max(100, room.width), height: max(100, room.height))
+            if fit {
+                scale = min(1, page.width / area.width, page.height / area.height)
+                columns = 1; rows = 1
+            } else {
+                scale = 1
+                columns = max(1, Int(ceil(area.width / page.width)))
+                rows = max(1, Int(ceil(area.height / page.height)))
+            }
+            setFrameSize(NSSize(width: page.width * CGFloat(columns), height: page.height * CGFloat(rows)))
+        }
+
+        override func knowsPageRange(_ range: NSRangePointer) -> Bool {
+            if let info = NSPrintOperation.current?.printInfo { layout(for: info) }
+            range.pointee = NSRange(location: 1, length: columns * rows)
+            return true
+        }
+
+        override func rectForPage(_ page: Int) -> NSRect {
+            let i = page - 1
+            return NSRect(x: CGFloat(i % columns) * self.page.width, y: CGFloat(i / columns) * self.page.height, width: self.page.width, height: self.page.height)
+        }
+
+        override func draw(_ dirtyRect: NSRect) {
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+            NSColor.white.setFill()
+            dirtyRect.fill()
+            ctx.saveGState()
+            // One page: in the middle of it. Several: from the top left, each page its own part.
+            if fit {
+                ctx.translateBy(x: (page.width - area.width * scale) / 2, y: (page.height - area.height * scale) / 2)
+            }
+            ctx.scaleBy(x: scale, y: scale)
+            ctx.translateBy(x: -area.minX, y: -area.minY)
+            Renderer.draw(scene, state: RenderState(), background: .white)
+            ctx.restoreGState()
+        }
+
+        override func drawPageBorder(with borderSize: NSSize) {
+            guard marks, let operation = NSPrintOperation.current else { return }
+            let info = operation.printInfo
+            let saved = frame
+            // The margins are drawn in the paper's own coordinates.
+            frame = NSRect(origin: .zero, size: borderSize)
+            lockFocus()
+            let style: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 9), .foregroundColor: NSColor.darkGray]
+            let date = Date().formatted(date: .abbreviated, time: .omitted)
+            let number = "Page \(operation.currentPage) of \(columns * rows)"
+            let top = max(12, info.topMargin / 2 - 6), bottom = borderSize.height - max(12, info.bottomMargin / 2) - 6
+            (title as NSString).draw(at: NSPoint(x: info.leftMargin, y: top), withAttributes: style)
+            (date as NSString).draw(at: NSPoint(x: borderSize.width - info.rightMargin - (date as NSString).size(withAttributes: style).width, y: top), withAttributes: style)
+            (number as NSString).draw(at: NSPoint(x: (borderSize.width - (number as NSString).size(withAttributes: style).width) / 2, y: bottom), withAttributes: style)
+            unlockFocus()
+            frame = saved
+        }
     }
 }

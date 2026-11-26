@@ -733,6 +733,45 @@ public struct Annotation: Codable, Identifiable, Equatable {
     }
 }
 
+/// How the SQL is written, kept with the diagram.
+public struct SQLOptions: Codable, Equatable {
+    public enum ForeignKeys: String, Codable, CaseIterable {
+        /// Inside CREATE TABLE, where the parent is already there.
+        case inTable
+        /// All after the tables, with ALTER TABLE.
+        case afterTables
+        case none
+    }
+    public enum Comments: String, Codable, CaseIterable {
+        case definition
+        /// The name you read, where the table or column is called something else.
+        case name
+        case none
+    }
+
+    /// DROP TABLE for every table first, children before parents, so the script can be run again.
+    public var dropTables = false
+    public var ifNotExists = false
+    public var foreignKeys = ForeignKeys.inTable
+    /// CREATE INDEX for the indexes that aren't unique.
+    public var indexes = true
+    /// Every name in quotes, not only the ones that need them.
+    public var quoteNames = false
+    public var comments = Comments.definition
+
+    public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        dropTables = try c.decodeIfPresent(Bool.self, forKey: .dropTables) ?? false
+        ifNotExists = try c.decodeIfPresent(Bool.self, forKey: .ifNotExists) ?? false
+        foreignKeys = try c.decodeIfPresent(ForeignKeys.self, forKey: .foreignKeys) ?? .inTable
+        indexes = try c.decodeIfPresent(Bool.self, forKey: .indexes) ?? true
+        quoteNames = try c.decodeIfPresent(Bool.self, forKey: .quoteNames) ?? false
+        comments = try c.decodeIfPresent(Comments.self, forKey: .comments) ?? .definition
+    }
+}
+
 /// One file: everything in a diagram.
 public struct Diagram: Codable, Equatable {
     /// The newest file version this app writes. A file is written as version 1 for as long as it holds nothing
@@ -753,9 +792,10 @@ public struct Diagram: Codable, Equatable {
     public var defaultType = ""
     /// Notes, text, shapes and drawings on the canvas, the first drawn first.
     public var annotations: [Annotation] = []
+    public var sql = SQLOptions()
 
     enum CodingKeys: String, CodingKey {
-        case version, entities, relationships, domains, display, dialect, entityTypes, dataTypes, defaultType, annotations
+        case version, entities, relationships, domains, display, dialect, entityTypes, dataTypes, defaultType, annotations, sql
     }
 
     public init() {}
@@ -772,6 +812,7 @@ public struct Diagram: Codable, Equatable {
         dataTypes = try c.decodeIfPresent([DataType].self, forKey: .dataTypes) ?? []
         defaultType = try c.decodeIfPresent(String.self, forKey: .defaultType) ?? ""
         annotations = try c.decodeIfPresent([Annotation].self, forKey: .annotations) ?? []
+        sql = try c.decodeIfPresent(SQLOptions.self, forKey: .sql) ?? SQLOptions()
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -786,6 +827,8 @@ public struct Diagram: Codable, Equatable {
         try a.put(dataTypes, .dataTypes, unless: [])
         try a.put(defaultType, .defaultType, unless: "")
         try a.put(annotations, .annotations, unless: [])
+        // How the SQL is written is no loss in an older app: it doesn't ask for the newer version.
+        if sql != SQLOptions() { try a.container.encode(sql, forKey: .sql) }
         // Last, when everything inside has said whether it needs the newer version.
         try a.container.encode(a.use?.newer == false ? 1 : Diagram.currentVersion, forKey: .version)
     }

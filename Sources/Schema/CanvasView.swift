@@ -198,7 +198,7 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
 
     private func droppedSQL(_ sender: NSDraggingInfo) -> [URL] {
         let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
-        return urls.filter { ["sql", "ddl", "txt"].contains($0.pathExtension.lowercased()) }
+        return urls.filter { ["sql", "ddl", "txt", "xlsx", "csv"].contains($0.pathExtension.lowercased()) }
     }
 
     private func droppedPictures(_ sender: NSDraggingInfo) -> [URL] {
@@ -215,6 +215,8 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             return true
         }
         guard let url = droppedSQL(sender).first else { return false }
+        // A spreadsheet with a row per attribute comes in as entities too.
+        if ["xlsx", "csv"].contains(url.pathExtension.lowercased()) { store.importSheet(url); return true }
         store.importFile(url, at: store.diagram.entities.isEmpty ? nil : p)
         return true
     }

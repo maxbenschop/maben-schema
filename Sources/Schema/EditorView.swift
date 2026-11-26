@@ -499,10 +499,13 @@ struct PaletteView: View {
             Item(id: "c.fit", title: "Zoom to Fit", detail: "⌘1", symbol: "arrow.up.left.and.arrow.down.right") { store.canvas?.zoomToFit() },
             Item(id: "c.sql", title: store.showSQL ? "Hide SQL" : "Show SQL", detail: "⌥⌘S", symbol: "chevron.left.forwardslash.chevron.right") { store.showSQL.toggle() },
             Item(id: "c.import", title: "Import SQL…", detail: "⇧⌘I", symbol: "square.and.arrow.down") { store.sheet = .importSQL },
+            Item(id: "c.sheet", title: "Import Spreadsheet…", detail: "xlsx, csv", symbol: "tablecells") { store.chooseSheet() },
             Item(id: "c.exportsql", title: "Export SQL…", detail: "⇧⌘E", symbol: "square.and.arrow.up", action: send(#selector(W.exportSQL(_:)))),
             Item(id: "c.exportimg", title: "Export Image…", detail: "⌥⌘E", symbol: "photo", action: send(#selector(W.exportImage(_:)))),
             Item(id: "c.copyimg", title: "Copy Diagram as Image", detail: "⇧⌘C", symbol: "doc.on.doc", action: send(#selector(W.copyImage(_:)))),
-            Item(id: "c.dict", title: "Export Data Dictionary…", detail: "", symbol: "tablecells", action: send(#selector(W.exportDictionary(_:)))),
+            Item(id: "c.dict", title: "Export Data Dictionary…", detail: "xlsx, md, csv", symbol: "tablecells", action: send(#selector(W.exportDictionary(_:)))),
+            Item(id: "c.doc", title: "Export Document…", detail: "html, rtf", symbol: "doc.richtext", action: send(#selector(W.exportDocument(_:)))),
+            Item(id: "c.print", title: "Print…", detail: "⌘P", symbol: "printer", action: send(#selector(NSDocument.printDocument(_:)))),
             Item(id: "c.astah", title: "Export for Astah…", detail: ".asta", symbol: "square.and.arrow.up.on.square", action: send(#selector(W.exportAstah(_:)))),
             Item(id: "c.notation", title: store.diagram.display.notation == .ie ? "Switch to IDEF1X" : "Switch to Crow’s Foot", detail: "notation", symbol: "arrow.triangle.branch") {
                 store.edit("Change Notation") { $0.display.notation = $0.display.notation == .ie ? .idef1x : .ie }

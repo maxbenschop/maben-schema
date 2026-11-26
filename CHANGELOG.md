@@ -16,6 +16,11 @@ releases as the GitHub release notes, and schema.maben.gg/changelog is built fro
 - An entity's own colours and width, more or less detail per entity, single attributes hidden; Copy Colours and Paste Colours; Bring to Front and Send to Back
 - Lines your way: drag a line to bend it through points of your own, make it straight or curved, give it a colour, hide its name or count, and let lines hop over each other where they cross
 - A map of the whole diagram, Find and Replace across all names, and a grid you can hide, resize or switch off
+- Options for the SQL, kept with the diagram: only the selected entities, DROP TABLE first, IF NOT EXISTS, foreign keys in the table, after it or left out, indexes or not, every name quoted, and what the comments are
+- The data dictionary as an Excel workbook; Import Spreadsheet reads entities from an Excel or CSV file with a row per attribute
+- Pictures as JPEG and SVG as well, and PNG and JPEG at 1× to 4×; a picture is now exactly the size it says on any screen (on a Retina screen a PNG came out twice as large)
+- Export Document: one web page with the picture and a table per entity, or RTF for a word processor
+- Print, on one page or over several, with Page Setup
 - Export for Astah (File menu, and ⌘K): an `.asta` file that Astah Professional opens with the same entities, attributes, keys, types, domains and relationships, in the same places and with the same lines, in the notation that was showing
 
 ## 0.1 · 20 November 2026

@@ -1,6 +1,7 @@
 import AppKit
 import SchemaCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum Selection: Equatable {
     case none
@@ -224,11 +225,15 @@ final class DiagramStore: ObservableObject {
         return s
     }
 
-    private var sqlCache: (revision: Int, sections: [SQLExport.Section])?
+    /// The SQL shows (and saves) only the selected entities.
+    @Published var sqlSelectedOnly = false
+
+    private var sqlCache: (revision: Int, only: Set<UUID>?, sections: [SQLExport.Section])?
     var sqlSections: [SQLExport.Section] {
-        if let c = sqlCache, c.revision == revision { return c.sections }
-        let s = SQLExport.sections(for: diagram)
-        sqlCache = (revision, s)
+        let only = sqlSelectedOnly && !selection.entityIDs.isEmpty ? selection.entityIDs : nil
+        if let c = sqlCache, c.revision == revision, c.only == only { return c.sections }
+        let s = SQLExport.sections(for: diagram, only: only)
+        sqlCache = (revision, only, s)
         return s
     }
     var sqlText: String { sqlSections.map(\.text).joined(separator: "\n\n") + "\n" }
@@ -539,6 +544,31 @@ final class DiagramStore: ObservableObject {
         let result = SQLImport.parse(sql)
         importResult(result, replace: replace, at: point)
         return result
+    }
+
+    /// Reads a spreadsheet (.xlsx or .csv) with a row per attribute, and adds its entities.
+    func importSheet(_ url: URL) {
+        do {
+            let result = try SheetImport.parse(contentsOf: url)
+            guard result.tables > 0 else {
+                let alert = NSAlert()
+                alert.messageText = "No entities in \(url.lastPathComponent)"
+                alert.informativeText = "It needs a sheet with a row per attribute, and a header that names at least the entity (or table) and the attribute (or column). Type, primary key, not null, unique, default, definition and references are read when they are there."
+                if let window { alert.beginSheetModal(for: window, completionHandler: nil) } else { alert.runModal() }
+                return
+            }
+            importResult(result, replace: false)
+        } catch {
+            showError(error, in: window, title: "Couldn’t read \(url.lastPathComponent)")
+        }
+    }
+
+    func chooseSheet() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "xlsx") ?? .data, .commaSeparatedText]
+        panel.message = "Choose an Excel or CSV file with a row per attribute. A data dictionary saved from here is one."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        importSheet(url)
     }
 
     /// Reads a SQL file in the background, however large, then adds its tables. Says so when it has none.

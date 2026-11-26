@@ -11,7 +11,8 @@ import SwiftUI
 //   --notation=ie|idef1x  --names=logical|physical  --detail=all|keys|namesOnly  --dialect=<name>
 //   --no-inspector  --no-sidebar  --empty  --features (a diagram with one of everything, in place of the sample)
 //   --snapshot=<file.png> [--size=1360x860]   draws the window into a PNG without showing it, then quits
-//   --export=<file.png|pdf|sql|md|csv|asta|mschema> [--dark]   writes the sample (or --open=<file>, or --from-sql=<file.sql>) and quits;
+//   --export=<file.png|pdf|sql|md|csv|xlsx|asta|mschema> [--dark]   writes the sample (or --open=<file>, --from-sql=<file.sql>,
+//                               --from-sheet=<file.xlsx|csv>) and quits; --sql-options=drop,quote,after,… sets how the SQL is written;
 //                               with --dialect=mysql and --from-sql it rewrites a dump's tables for another database
 //   --import-sheet=<file.sql>   opens the import sheet on a file (with --snapshot: a picture of the sheet)
 //   --import-file=<file.sql>    reads a SQL file the way dropping it on the canvas does
@@ -27,7 +28,7 @@ enum Flags {
     }
     static func has(_ name: String) -> Bool { CommandLine.arguments.contains("--\(name)") }
     static var bench: Bool { has("bench") || value("bench") != nil }
-    static var headless: Bool { value("snapshot") != nil || value("export") != nil || value("inspect") != nil || has("selftest") || bench }
+    static var headless: Bool { value("snapshot") != nil || value("export") != nil || value("print") != nil || value("inspect") != nil || has("selftest") || bench }
 }
 
 @MainActor
@@ -160,10 +161,15 @@ enum MainMenu {
             item("Revert to Saved", #selector(NSDocument.revertToSaved(_:)), ""),
             .separator(),
             item("Import SQL…", #selector(W.importSQL(_:)), "i", [.command, .shift]),
+            item("Import Spreadsheet…", #selector(W.importSpreadsheet(_:)), ""),
             item("Export SQL…", #selector(W.exportSQL(_:)), "e", [.command, .shift]),
             item("Export Image…", #selector(W.exportImage(_:)), "e", [.command, .option]),
             item("Export Data Dictionary…", #selector(W.exportDictionary(_:)), ""),
+            item("Export Document…", #selector(W.exportDocument(_:)), ""),
             item("Export for Astah…", #selector(W.exportAstah(_:)), ""),
+            .separator(),
+            item("Page Setup…", #selector(NSDocument.runPageLayout(_:)), "p", [.command, .shift]),
+            item("Print…", #selector(NSDocument.printDocument(_:)), "p"),
         ])
         menu("Edit", [
             item("Undo", Selector(("undo:")), "z"),
@@ -282,12 +288,32 @@ enum Headless {
         if let path = Flags.value("from-sql") {
             do { diagram = try SQLImport.parse(contentsOf: URL(fileURLWithPath: path)).diagram } catch { fail("Couldn't read \(path): \(error.localizedDescription)") }
         }
+        if let path = Flags.value("from-sheet") {
+            do { diagram = try SheetImport.parse(contentsOf: URL(fileURLWithPath: path)).diagram } catch { fail("Couldn't read \(path): \(error.localizedDescription)") }
+        }
         if let v = Flags.value("dialect").flatMap(Dialect.init(rawValue:)) { diagram.dialect = v }
+        // --sql-options=drop,quote,after,nokeys,noindexes,ifnotexists,names,nocomments: how the SQL is written.
+        if let list = Flags.value("sql-options") {
+            for word in list.split(separator: ",") {
+                switch word {
+                case "drop": diagram.sql.dropTables = true
+                case "quote": diagram.sql.quoteNames = true
+                case "after": diagram.sql.foreignKeys = .afterTables
+                case "nokeys": diagram.sql.foreignKeys = .none
+                case "noindexes": diagram.sql.indexes = false
+                case "ifnotexists": diagram.sql.ifNotExists = true
+                case "names": diagram.sql.comments = .name
+                case "nocomments": diagram.sql.comments = .none
+                default: fail("Unknown SQL option: \(word)")
+                }
+            }
+        }
         // How it is drawn counts for an export too: a picture, or a file that keeps the notation.
         if let v = Flags.value("notation").flatMap(Notation.init(rawValue:)) { diagram.display.notation = v }
         if let v = Flags.value("names").flatMap(NameDisplay.init(rawValue:)) { diagram.display.names = v }
         if let v = Flags.value("detail").flatMap(DetailLevel.init(rawValue:)) { diagram.display.level = v }
         if let path = Flags.value("inspect") { inspect(path) }
+        if let path = Flags.value("print") { printed(diagram, to: path) }
         if let path = Flags.value("export") { export(diagram, to: path) }
         guard let doc = (NSDocumentController.shared as? SchemaDocumentController)?.openUntitled(with: diagram, display: false),
               let window = doc.windowControllers.first?.window else { fail("No window") }
@@ -373,17 +399,39 @@ enum Headless {
         exit(0)
     }
 
+    /// `--print=<file.pdf>`: what File › Print puts on paper, saved as a PDF without a print panel.
+    static func printed(_ diagram: Diagram, to path: String) -> Never {
+        let view = Picture.PrintView(scene: Scene(diagram), title: "Diagram", fit: !Flags.has("tiled"), marks: true)
+        let info = NSPrintInfo()
+        info.orientation = view.area.width > view.area.height * 1.15 ? .landscape : .portrait
+        info.jobDisposition = .save
+        info.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = URL(fileURLWithPath: path)
+        view.layout(for: info)
+        let operation = NSPrintOperation(view: view, printInfo: info)
+        operation.showsPrintPanel = false
+        operation.showsProgressPanel = false
+        guard operation.run() else { fail("Printing to \(path) didn't work") }
+        print("wrote \(path)")
+        exit(0)
+    }
+
     static func export(_ diagram: Diagram, to path: String) -> Never {
         let url = URL(fileURLWithPath: path)
         let scene = Scene(diagram)
         let dark = Flags.has("dark")
         do {
             switch url.pathExtension.lowercased() {
-            case "png": try (Picture.png(scene, dark: dark, transparent: Flags.has("transparent")) ?? Data()).write(to: url)
-            case "pdf": try Picture.pdf(scene, dark: dark, transparent: Flags.has("transparent")).write(to: url)
+            case "png", "jpg", "pdf", "svg":
+                // --scale=1…4: how fine a PNG or JPEG is.
+                let format = ImageFormat(rawValue: url.pathExtension.lowercased()) ?? .png
+                let scale = CGFloat(min(4, max(1, Flags.value("scale").flatMap(Int.init) ?? 2)))
+                try (Picture.data(scene, format: format, dark: dark, transparent: Flags.has("transparent"), scale: scale) ?? Data()).write(to: url)
+            case "html": try DocumentExport.html(for: diagram, scene: scene, title: "Diagram").write(to: url, atomically: true, encoding: .utf8)
+            // --print=<file.pdf> [--tiled]: what File › Print puts on paper, as a PDF.
             case "sql": try SQLExport.script(for: diagram).write(to: url, atomically: true, encoding: .utf8)
             case "md": try Report.markdown(for: diagram, title: "Diagram").write(to: url, atomically: true, encoding: .utf8)
             case "csv": try Report.csv(for: diagram).write(to: url, atomically: true, encoding: .utf8)
+            case "xlsx": try Report.workbook(for: diagram).xlsx().write(to: url)
             case AstaExport.fileExtension: try AstaExport.data(for: diagram, layout: scene.astaLayout).write(to: url)
             // What Astah should show after opening that file (see Resources/astah).
             case "astalist": try AstaExport.manifest(for: diagram).write(to: url, atomically: true, encoding: .utf8)

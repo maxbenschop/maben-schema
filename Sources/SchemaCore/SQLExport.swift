@@ -8,23 +8,44 @@ public enum SQLExport {
         public var text: String
     }
 
-    public static func script(for diagram: Diagram, dialect: Dialect? = nil, comments: Bool = true) -> String {
-        sections(for: diagram, dialect: dialect, comments: comments).map(\.text).joined(separator: "\n\n") + "\n"
+    /// `only`: write just these entities (and the links between them). `options`: in place of the diagram's own.
+    public static func script(for diagram: Diagram, dialect: Dialect? = nil, comments: Bool = true, options: SQLOptions? = nil, only: Set<UUID>? = nil) -> String {
+        sections(for: diagram, dialect: dialect, comments: comments, options: options, only: only).map(\.text).joined(separator: "\n\n") + "\n"
     }
 
-    public static func sections(for diagram: Diagram, dialect: Dialect? = nil, comments: Bool = true) -> [Section] {
+    public static func sections(for diagram: Diagram, dialect: Dialect? = nil, comments: Bool = true, options: SQLOptions? = nil, only: Set<UUID>? = nil) -> [Section] {
         let dialect = dialect ?? diagram.dialect
-        let tables = order(tables(for: diagram, dialect: dialect))
+        var options = options ?? diagram.sql
+        if !comments { options.comments = .none }
+        var tables = order(tables(for: diagram, dialect: dialect, logicalComments: options.comments == .name))
+        if let only {
+            // Part of the diagram: its tables, and only the keys that point inside it. A table between two entities
+            // (many-to-many) comes along when both are there.
+            let kept = Set(diagram.entities.filter { only.contains($0.id) }.map(\.tableName))
+            tables = tables.filter { t in t.entity.map(only.contains) ?? t.foreignKeys.allSatisfy { kept.contains($0.table) } }
+            for i in tables.indices {
+                let own = tables[i].name
+                tables[i].foreignKeys.removeAll { !kept.contains($0.table) && $0.table != own }
+            }
+        }
+        func q(_ name: String) -> String { quote(name, dialect, always: options.quoteNames) }
         var out = [Section(entity: nil, text: "-- \(dialect.title), made with Maben Schema")]
         var created: Set<String> = []
         var later: [(table: Table, key: ForeignKey)] = []
 
+        if options.dropTables, !tables.isEmpty {
+            // Children first, so nothing still points at a table when it goes.
+            let exists = dialect == .standard ? "" : "IF EXISTS "
+            out.append(Section(entity: nil, text: tables.reversed().map { "DROP TABLE \(exists)\(q($0.name));" }.joined(separator: "\n")))
+        }
+        let guarded = options.ifNotExists && dialect != .sqlserver && dialect != .standard
+
         for table in tables {
             var lines: [String] = []
             let singleKey = table.key.count == 1 ? table.key[0] : nil
-            let width = table.columns.map { quote($0.name, dialect).count }.max() ?? 0
+            let width = table.columns.map { q($0.name).count }.max() ?? 0
             for c in table.columns {
-                var parts = [quote(c.name, dialect).padding(toLength: width, withPad: " ", startingAt: 0)]
+                var parts = [q(c.name).padding(toLength: width, withPad: " ", startingAt: 0)]
                 var type = c.type.isEmpty ? defaultType(dialect) : c.type
                 var inlineKey = c.name == singleKey
                 var tail: [String] = []
@@ -45,20 +66,21 @@ public enum SQLExport {
                 if c.unique && c.name != singleKey { parts.append("UNIQUE") }
                 if !c.defaultValue.isEmpty { parts.append("DEFAULT " + defaultValue(c.defaultValue, dialect)) }
                 var line = "    " + parts.joined(separator: " ").trimmingCharacters(in: .whitespaces)
-                if comments, !c.comment.isEmpty { line += "\u{1}" + oneLine(c.comment) }
+                if options.comments != .none, !c.comment.isEmpty { line += "\u{1}" + oneLine(c.comment) }
                 lines.append(line)
             }
             if table.key.count > 1 {
-                lines.append("    PRIMARY KEY (" + table.key.map { quote($0, dialect) }.joined(separator: ", ") + ")")
+                lines.append("    PRIMARY KEY (" + table.key.map { q($0) }.joined(separator: ", ") + ")")
             }
             for unique in table.uniques {
-                lines.append("    CONSTRAINT \(quote(unique.name, dialect)) UNIQUE (" + unique.columns.map { quote($0, dialect) }.joined(separator: ", ") + ")")
+                lines.append("    CONSTRAINT \(q(unique.name)) UNIQUE (" + unique.columns.map { q($0) }.joined(separator: ", ") + ")")
             }
-            for key in table.foreignKeys {
+            for key in table.foreignKeys where options.foreignKeys != .none {
                 // A parent that comes later in the script (a circle of references) is added with ALTER TABLE at
                 // the end. SQLite can't do that, and doesn't need to: it accepts a table that doesn't exist yet.
-                if created.contains(key.table) || key.table == table.name || dialect == .sqlite {
-                    lines.append("    " + constraint(key, dialect))
+                let inside = dialect == .sqlite || (options.foreignKeys == .inTable && (created.contains(key.table) || key.table == table.name))
+                if inside {
+                    lines.append("    " + constraint(key, dialect, q))
                 } else {
                     later.append((table, key))
                 }
@@ -72,20 +94,22 @@ public enum SQLExport {
                 body.append(text)
             }
             var text = ""
-            if comments, !table.comment.isEmpty {
+            if options.comments != .none, !table.comment.isEmpty {
                 text += table.comment.split(separator: "\n").map { "-- " + $0 }.joined(separator: "\n") + "\n"
             }
-            text += "CREATE TABLE \(quote(table.name, dialect)) (\n" + body.joined(separator: "\n") + "\n);"
+            text += "CREATE TABLE \(guarded ? "IF NOT EXISTS " : "")\(q(table.name)) (\n" + body.joined(separator: "\n") + "\n);"
             // Indexes that aren't unique come after their table; a unique one is a constraint inside it, so a
             // foreign key can point at it.
-            for index in table.indexes {
-                text += "\nCREATE INDEX \(quote(index.name, dialect)) ON \(quote(table.name, dialect)) (" + index.columns.map { quote($0, dialect) }.joined(separator: ", ") + ");"
+            if options.indexes {
+                for index in table.indexes {
+                    text += "\nCREATE INDEX \(guarded && dialect != .mysql ? "IF NOT EXISTS " : "")\(q(index.name)) ON \(q(table.name)) (" + index.columns.map { q($0) }.joined(separator: ", ") + ");"
+                }
             }
             out.append(Section(entity: table.entity, text: text))
             created.insert(table.name)
         }
         for (table, key) in later {
-            out.append(Section(entity: table.entity, text: "ALTER TABLE \(quote(table.name, dialect)) ADD " + constraint(key, dialect) + ";"))
+            out.append(Section(entity: table.entity, text: "ALTER TABLE \(q(table.name)) ADD " + constraint(key, dialect, q) + ";"))
         }
         return out
     }
@@ -122,7 +146,8 @@ public enum SQLExport {
         var indexes: [(name: String, columns: [String])] = []
     }
 
-    static func tables(for d: Diagram, dialect: Dialect) -> [Table] {
+    /// `logicalComments`: the comment on a table or column is the name you read (where it differs), not the definition.
+    static func tables(for d: Diagram, dialect: Dialect, logicalComments: Bool = false) -> [Table] {
         var tables: [Table] = []
         var names: Set<String> = []
         func free(_ wanted: String) -> String {
@@ -138,14 +163,15 @@ public enum SQLExport {
             let inherited = domain.map { [$0] + d.ancestors(of: $0) } ?? []
             return Column(name: a.columnName, type: map(d.resolvedType(a.type), dialect), notNull: a.notNull || inherited.contains(where: \.notNull), unique: a.unique,
                           autoIncrement: a.autoIncrement,
-                          defaultValue: a.defaultValue.isEmpty ? inherited.first { !$0.defaultValue.isEmpty }?.defaultValue ?? "" : a.defaultValue, comment: a.definition)
+                          defaultValue: a.defaultValue.isEmpty ? inherited.first { !$0.defaultValue.isEmpty }?.defaultValue ?? "" : a.defaultValue,
+                          comment: logicalComments ? (a.name == a.columnName ? "" : a.name) : a.definition)
         }
         var byID: [UUID: Entity] = [:]
         for e in d.entities { byID[e.id] = e }
         var incoming: [UUID: [Relationship]] = [:]
         for r in d.relationships where r.kind != .manyToMany { incoming[r.child, default: []].append(r) }
         for e in d.entities {
-            var t = Table(entity: e.id, name: e.tableName, comment: e.definition)
+            var t = Table(entity: e.id, name: e.tableName, comment: logicalComments ? (e.name == e.tableName ? "" : e.name) : e.definition)
             t.columns = e.attributes.map(column)
             t.key = e.primaryKey.map(\.columnName)
             for index in e.indexes {
@@ -240,9 +266,9 @@ public enum SQLExport {
         }
     }
 
-    static func constraint(_ key: ForeignKey, _ dialect: Dialect) -> String {
-        var s = "CONSTRAINT \(quote(key.name, dialect)) FOREIGN KEY (" + key.columns.map { quote($0, dialect) }.joined(separator: ", ")
-            + ") REFERENCES \(quote(key.table, dialect)) (" + key.references.map { quote($0, dialect) }.joined(separator: ", ") + ")"
+    static func constraint(_ key: ForeignKey, _ dialect: Dialect, _ q: (String) -> String) -> String {
+        var s = "CONSTRAINT \(q(key.name)) FOREIGN KEY (" + key.columns.map(q).joined(separator: ", ")
+            + ") REFERENCES \(q(key.table)) (" + key.references.map(q).joined(separator: ", ") + ")"
         // SQL Server has no RESTRICT; leaving the rule out refuses the delete there too (NO ACTION).
         func written(_ action: ReferentialAction) -> Bool { action != .noAction && !(dialect == .sqlserver && action == .restrict) }
         if written(key.onDelete) { s += " ON DELETE " + key.onDelete.sql }
@@ -268,15 +294,15 @@ public enum SQLExport {
     ]
 
     /// Quotes a name only when the engine needs it: a reserved word, or anything other than letters, digits and _.
-    public static func quote(_ name: String, _ dialect: Dialect) -> String {
+    public static func quote(_ name: String, _ dialect: Dialect, always: Bool = false) -> String {
         // shop.customer is a table in a database (or schema): each part is quoted by itself.
         if name.contains("."), !name.hasPrefix("."), !name.hasSuffix(".") {
-            return name.split(separator: ".").map { quote(String($0), dialect) }.joined(separator: ".")
+            return name.split(separator: ".").map { quote(String($0), dialect, always: always) }.joined(separator: ".")
         }
         let plain = !name.isEmpty && name.unicodeScalars.allSatisfy { ($0.isASCII && (CharacterSet.alphanumerics.contains($0))) || $0 == "_" }
             && !(name.first?.isNumber ?? false) && !reserved.contains(name.lowercased())
             && (dialect != .postgres || name == name.lowercased())
-        if plain { return name }
+        if plain, !always { return name }
         switch dialect {
         case .mysql: return "`" + name.replacingOccurrences(of: "`", with: "``") + "`"
         case .sqlserver: return "[" + name.replacingOccurrences(of: "]", with: "]]") + "]"

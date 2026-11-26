@@ -31,6 +31,27 @@ final class SchemaDocument: NSDocument {
         }
     }
 
+    /// File › Print: the diagram on paper. The two choices under the print panel are remembered.
+    override func printOperation(withSettings printSettings: [NSPrintInfo.AttributeKey: Any]) throws -> NSPrintOperation {
+        let (scene, title) = MainActor.assumeIsolated { (Scene(store.diagram), store.title) }
+        let defaults = UserDefaults.standard
+        let view = Picture.PrintView(scene: scene, title: title, fit: defaults.object(forKey: "print.fit") as? Bool ?? true, marks: defaults.object(forKey: "print.marks") as? Bool ?? true)
+        let info = printInfo.copy() as! NSPrintInfo
+        info.dictionary().addEntries(from: printSettings)
+        info.horizontalPagination = .automatic
+        info.verticalPagination = .automatic
+        info.isHorizontallyCentered = false
+        info.isVerticallyCentered = false
+        // A diagram is usually wider than it is tall.
+        if view.area.width > view.area.height * 1.15, printSettings[.orientation] == nil, defaults.object(forKey: "print.orientationSet") == nil { info.orientation = .landscape }
+        view.layout(for: info)
+        let operation = NSPrintOperation(view: view, printInfo: info)
+        operation.jobTitle = title
+        operation.printPanel.options.formUnion([.showsOrientation, .showsPaperSize, .showsScaling, .showsPreview])
+        operation.printPanel.addAccessoryController(PrintOptions(view: view))
+        return operation
+    }
+
     override func data(ofType typeName: String) throws -> Data {
         try MainActor.assumeIsolated { try store.diagram.encoded() }
     }
@@ -204,7 +225,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         case #selector(toggleGrid(_:)): item.title = Grid.show ? "Hide Grid" : "Show Grid"
         case #selector(toggleSnap(_:)): item.state = Grid.snaps ? .on : .off
         case #selector(showReplace(_:)): return !d.entities.isEmpty
-        case #selector(tidyUp(_:)), #selector(exportSQL(_:)), #selector(exportImage(_:)), #selector(copyImage(_:)), #selector(exportDictionary(_:)),
+        case #selector(tidyUp(_:)), #selector(exportSQL(_:)), #selector(exportImage(_:)), #selector(copyImage(_:)), #selector(exportDictionary(_:)), #selector(exportDocument(_:)),
              #selector(exportAstah(_:)):
             return !d.entities.isEmpty
         case #selector(setNotation(_:)): item.state = (item.representedObject as? String) == d.display.notation.rawValue ? .on : .off
@@ -222,6 +243,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     // MARK: Import and export
 
     @objc func importSQL(_ sender: Any?) { store.sheet = .importSQL }
+    @objc func importSpreadsheet(_ sender: Any?) { store.chooseSheet() }
 
     fileprivate var baseName: String {
         (document?.displayName ?? "diagram").replacingOccurrences(of: ".\(schemaExtension)", with: "")
@@ -245,24 +267,44 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         save(baseName + ".sql", types: [UTType(filenameExtension: "sql") ?? .plainText]) { try sql.write(to: $0, atomically: true, encoding: .utf8) }
     }
 
-    /// PNG or PDF by the file's extension; light or dark, with or without a background.
+    /// PNG, JPEG, PDF or SVG; light or dark, with or without a background, and for the two made of dots how fine.
     @objc func exportImage(_ sender: Any?) {
         let options = ImageOptionsView()
         let scene = Scene(store.diagram)
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = baseName + ".png"
-        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = baseName + "." + options.format.rawValue
+        panel.allowedContentTypes = [options.format.type]
         panel.canCreateDirectories = true
         panel.accessoryView = options
-        options.formatChanged = { [weak panel] pdf in
-            panel?.allowedContentTypes = [pdf ? .pdf : .png]
+        options.formatChanged = { [weak panel] format in
+            panel?.allowedContentTypes = [format.type]
         }
         guard let window else { return }
         panel.beginSheetModal(for: window) { response in
             guard response == .OK, let url = panel.url else { return }
-            let data = options.pdf ? Picture.pdf(scene, dark: options.dark, transparent: options.transparent)
-                                   : Picture.png(scene, dark: options.dark, transparent: options.transparent)
+            let data = Picture.data(scene, format: options.format, dark: options.dark, transparent: options.transparent, scale: options.scale)
             do { try (data ?? Data()).write(to: url) } catch { showError(error, in: window, title: "Couldn’t save \(url.lastPathComponent)") }
+        }
+    }
+
+    /// The whole diagram as one document to read: the picture, then every entity with its attributes, the
+    /// relationships and the domains. As a web page (.html), or for a word processor (.rtf, without the picture).
+    @objc func exportDocument(_ sender: Any?) {
+        let d = store.diagram
+        let scene = Scene(d)
+        let title = baseName
+        save(baseName + ".html", types: [.html, .rtf]) { url in
+            let rtf = url.pathExtension.lowercased() == "rtf"
+            let html = DocumentExport.html(for: d, scene: rtf ? nil : scene, title: title)
+            if rtf {
+                guard let text = NSAttributedString(html: Data(html.utf8), options: [.characterEncoding: String.Encoding.utf8.rawValue], documentAttributes: nil),
+                      let data = text.rtf(from: NSRange(location: 0, length: text.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                try data.write(to: url)
+            } else {
+                try html.write(to: url, atomically: true, encoding: .utf8)
+            }
         }
     }
 
@@ -279,9 +321,13 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     @objc func exportDictionary(_ sender: Any?) {
         let d = store.diagram
         let title = baseName
-        save(baseName + " data dictionary.md", types: [UTType(filenameExtension: "md") ?? .plainText, .commaSeparatedText]) { url in
-            let text = url.pathExtension.lowercased() == "csv" ? Report.csv(for: d) : Report.markdown(for: d, title: title)
-            try text.write(to: url, atomically: true, encoding: .utf8)
+        // Excel by default; .md or .csv when the name is given that ending.
+        save(baseName + " data dictionary.xlsx", types: [UTType(filenameExtension: "xlsx") ?? .data, UTType(filenameExtension: "md") ?? .plainText, .commaSeparatedText]) { url in
+            switch url.pathExtension.lowercased() {
+            case "csv": try Report.csv(for: d).write(to: url, atomically: true, encoding: .utf8)
+            case "md": try Report.markdown(for: d, title: title).write(to: url, atomically: true, encoding: .utf8)
+            default: try Report.workbook(for: d).xlsx().write(to: url)
+            }
         }
     }
 }
@@ -299,24 +345,115 @@ extension EditorWindowController {
     }
 }
 
+/// The kinds of picture a diagram can be saved as.
+enum ImageFormat: String, CaseIterable {
+    case png, jpg, pdf, svg
+
+    var type: UTType {
+        switch self {
+        case .png: .png
+        case .jpg: .jpeg
+        case .pdf: .pdf
+        case .svg: .svg
+        }
+    }
+    var title: String {
+        switch self {
+        case .png: "PNG (picture)"
+        case .jpg: "JPEG (picture, smaller)"
+        case .pdf: "PDF (sharp at any size)"
+        case .svg: "SVG (shapes and text, for the web)"
+        }
+    }
+    /// Made of dots, so how fine matters.
+    var isBitmap: Bool { self == .png || self == .jpg }
+}
+
+extension Picture {
+    static func data(_ scene: Scene, format: ImageFormat, dark: Bool, transparent: Bool, scale: CGFloat = 2) -> Data? {
+        switch format {
+        case .png: png(scene, dark: dark, transparent: transparent, scale: scale)
+        case .jpg: jpeg(scene, dark: dark, scale: scale)
+        case .pdf: pdf(scene, dark: dark, transparent: transparent)
+        case .svg: Data(SVG.document(scene, dark: dark, transparent: transparent).utf8)
+        }
+    }
+}
+
+/// The two choices under the print panel: on one page or at its own size, and the title, date and page number.
+final class PrintOptions: NSViewController, NSPrintPanelAccessorizing {
+    private let printed: Picture.PrintView
+    private let fit = NSButton(checkboxWithTitle: "Fit on one page", target: nil, action: nil)
+    private let marks = NSButton(checkboxWithTitle: "Title, date and page number in the margins", target: nil, action: nil)
+
+    init(view: Picture.PrintView) {
+        printed = view
+        super.init(nibName: nil, bundle: nil)
+        title = "Maben Schema"
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        fit.state = printed.fit ? .on : .off
+        marks.state = printed.marks ? .on : .off
+        for button in [fit, marks] { button.target = self; button.action = #selector(changed) }
+        let stack = NSStackView(views: [fit, marks])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
+        view = stack
+    }
+
+    @objc private func changed() {
+        willChangeValue(forKey: "layoutVersion")
+        printed.fit = fit.state == .on
+        printed.marks = marks.state == .on
+        UserDefaults.standard.set(printed.fit, forKey: "print.fit")
+        UserDefaults.standard.set(printed.marks, forKey: "print.marks")
+        if let info = representedObject as? NSPrintInfo { printed.layout(for: info) }
+        printed.needsDisplay = true
+        didChangeValue(forKey: "layoutVersion")
+    }
+
+    /// Changing either choice changes what the preview shows.
+    @objc dynamic var layoutVersion: Int { 0 }
+    func keyPathsForValuesAffectingPreview() -> Set<String> { ["layoutVersion"] }
+
+    func localizedSummaryItems() -> [[NSPrintPanel.AccessorySummaryKey: String]] {
+        [[.itemName: "Pages", .itemDescription: printed.fit ? "Fitted on one page" : "At its own size, over as many pages as it takes"]]
+    }
+}
+
 /// The choices under the save panel for a picture.
 final class ImageOptionsView: NSView {
-    private let format = NSPopUpButton()
+    private let formats = NSPopUpButton()
     private let look = NSPopUpButton()
+    private let fineness = NSPopUpButton()
     private let background = NSButton(checkboxWithTitle: "Transparent background", target: nil, action: nil)
-    var formatChanged: ((Bool) -> Void)?
+    var formatChanged: ((ImageFormat) -> Void)?
 
-    var pdf: Bool { format.indexOfSelectedItem == 1 }
+    var format: ImageFormat { ImageFormat.allCases[max(0, formats.indexOfSelectedItem)] }
     var dark: Bool { look.indexOfSelectedItem == 1 }
-    var transparent: Bool { background.state == .on }
+    var transparent: Bool { background.state == .on && format != .jpg }
+    /// 1× is one dot per point (72 a inch); 2× is what a Retina screen shows.
+    var scale: CGFloat { CGFloat(fineness.indexOfSelectedItem + 1) }
 
     init() {
-        super.init(frame: NSRect(x: 0, y: 0, width: 520, height: 44))
-        format.addItems(withTitles: ["PNG (picture, 2×)", "PDF (sharp at any size)"])
+        super.init(frame: NSRect(x: 0, y: 0, width: 640, height: 44))
+        formats.addItems(withTitles: ImageFormat.allCases.map(\.title))
         look.addItems(withTitles: ["Light", "Dark"])
-        format.target = self
-        format.action = #selector(changed)
-        let stack = NSStackView(views: [NSTextField(labelWithString: "Format:"), format, NSTextField(labelWithString: "Look:"), look, background])
+        fineness.addItems(withTitles: ["1× (72 dpi)", "2× (144 dpi)", "3× (216 dpi)", "4× (288 dpi)"])
+        let defaults = UserDefaults.standard
+        fineness.selectItem(at: min(3, max(0, (defaults.object(forKey: "image.scale") as? Int ?? 2) - 1)))
+        if let saved = defaults.string(forKey: "image.format"), let i = ImageFormat.allCases.firstIndex(where: { $0.rawValue == saved }) { formats.selectItem(at: i) }
+        formats.target = self
+        formats.action = #selector(changed)
+        fineness.target = self
+        fineness.action = #selector(changed)
+        fineness.isEnabled = format.isBitmap
+        let format = formats
+        let stack = NSStackView(views: [NSTextField(labelWithString: "Format:"), format, fineness, NSTextField(labelWithString: "Look:"), look, background])
         stack.orientation = .horizontal
         stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -331,5 +468,11 @@ final class ImageOptionsView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func changed() { formatChanged?(pdf) }
+    @objc private func changed() {
+        fineness.isEnabled = format.isBitmap
+        background.isEnabled = format != .jpg
+        UserDefaults.standard.set(format.rawValue, forKey: "image.format")
+        UserDefaults.standard.set(fineness.indexOfSelectedItem + 1, forKey: "image.scale")
+        formatChanged?(format)
+    }
 }
