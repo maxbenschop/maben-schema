@@ -45,4 +45,81 @@ public enum Sample {
         d.normalize()
         return d
     }
+
+    /// A small diagram with one of everything a diagram can hold: kinds, indexes, a relationship to an index,
+    /// counts, a subtype with its discriminator, domains under a domain, a type of your own, other names and tags.
+    /// For the tests and for checking the exports (`--features`).
+    public static func features() -> Diagram {
+        var d = Diagram()
+        d.entityTypes.append(EntityType(name: "Lookup", color: "#CCCCFF"))
+        d.dataTypes = [DataType(name: "CITEXT", length: .none, definition: "Text that ignores case."), DataType(name: "BARCODE", length: .required, defaultLength: "13")]
+        var money = Domain(name: "money", type: "DECIMAL(10,2)", definition: "An amount in euros.")
+        money.notNull = true
+        money.defaultValue = "0"
+        var wage = Domain(name: "wage", type: "", definition: "What someone earns a month.")
+        wage.parent = money.id
+        wage.physicalName = "monthly_wage"
+        wage.tags = [Tag(name: "unit", value: "EUR")]
+        d.domains = [money, wage]
+
+        func entity(_ name: String, _ x: Double, _ y: Double, kind: String = "", _ lines: [String]) -> UUID {
+            var e = Entity(name: name, position: Point(x, y))
+            e.kind = kind
+            e.attributes = lines.compactMap { QuickEntry.parse($0, domains: d.domains, types: d.dataTypes) }
+            d.entities.append(e)
+            return e.id
+        }
+        let person = entity("Person", 420, 80, kind: "Resource", ["*id integer auto", "name varchar(120) not null", "email citext not null", "kind char(1) not null = 'E'"])
+        let employee = entity("Employee", 240, 380, ["salary wage", "hired_on date not null"])
+        let contractor = entity("Contractor", 530, 380, ["rate money", "agency varchar(80)"])
+        let badge = entity("Badge", 80, 80, kind: "Lookup", ["*id integer auto", "code barcode unique not null", "issued_on date"])
+        let shift = entity("Shift", 800, 80, kind: "Event", ["*id integer auto", "starts_at timestamp not null", "ends_at timestamp"])
+        let desk = entity("Desk", 810, 380, ["*id integer auto", "floor smallint not null", "number smallint not null", "note text"])
+
+        d.update(entity: person) { e in
+            e.definition = "Anyone who works here."
+            e.alias1 = "Persoon"
+            e.alias2 = "Personne"
+            e.tags = [Tag(name: "owner", value: "hr"), Tag(name: "pii")]
+            e.links = ["https://example.com/people"]
+            e.package = "People"
+            e.indexes = [Index(name: "ak_person_email", attributes: [e.attributes[2].id], unique: true),
+                         Index(name: "ix_person_name_kind", attributes: [e.attributes[1].id, e.attributes[3].id], unique: false)]
+            e.attributes[1].alias1 = "naam"
+            e.attributes[1].tags = [Tag(name: "shown", value: "yes")]
+            e.attributes[1].definition = "Full name."
+        }
+        d.update(entity: employee) { $0.package = "People" }
+        d.update(entity: contractor) { $0.package = "People"; $0.style.fill = "#FFE0B2" }
+        d.update(entity: desk) { e in
+            e.indexes = [Index(name: "ak_desk_place", attributes: [e.attributes[1].id, e.attributes[2].id], unique: true)]
+        }
+        let kind = d.entity(person)!.attributes[3].id
+        let email = d.entity(person)!.indexes[0].id
+
+        var isEmployee = Relationship(parent: person, child: employee, kind: .subtype, name: "is an employee")
+        isEmployee.discriminator = kind
+        var isContractor = Relationship(parent: person, child: contractor, kind: .subtype, name: "is a contractor")
+        isContractor.discriminator = kind
+        isContractor.complete = false
+        // Points at the unique index on email, not at the key.
+        var carries = Relationship(parent: person, child: badge, name: "carries")
+        carries.childName = "is carried by"
+        carries.parentIndex = email
+        carries.definition = "The badge someone opens doors with."
+        carries.physicalName = "fk_badge_holder"
+        var works = Relationship(parent: person, child: shift, name: "works", onDelete: .cascade)
+        works.childName = "is worked by"
+        works.childCardinality = .counted
+        works.childLower = 2
+        works.childUpper = 5
+        var sits = Relationship(parent: desk, child: shift, name: "seats", parentOptional: true, onDelete: .setNull)
+        sits.childCardinality = .counted
+        sits.childLower = 3
+        sits.childUpper = 3
+        sits.tags = [Tag(name: "since", value: "2026")]
+        d.relationships = [isEmployee, isContractor, carries, works, sits]
+        d.normalize()
+        return d
+    }
 }

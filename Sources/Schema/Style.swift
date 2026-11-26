@@ -60,6 +60,22 @@ enum MB {
     static let nsMono = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 }
 
+extension NSColor {
+    /// `#RRGGBB` (or `RRGGBB`); nil for anything else, an empty text included.
+    convenience init?(hex: String) {
+        var text = hex.trimmingCharacters(in: .whitespaces)
+        if text.hasPrefix("#") { text.removeFirst() }
+        guard text.count == 6, let value = UInt32(text, radix: 16) else { return nil }
+        self.init(srgbRed: CGFloat(value >> 16 & 0xFF) / 255, green: CGFloat(value >> 8 & 0xFF) / 255, blue: CGFloat(value & 0xFF) / 255, alpha: 1)
+    }
+
+    /// The colour as `#RRGGBB`.
+    var hex: String {
+        let c = usingColorSpace(.sRGB) ?? self
+        return String(format: "#%02X%02X%02X", Int((c.redComponent * 255).rounded()), Int((c.greenComponent * 255).rounded()), Int((c.blueComponent * 255).rounded()))
+    }
+}
+
 extension EntityColor {
     /// The tag colour, or nil for none.
     var nsColor: NSColor? {

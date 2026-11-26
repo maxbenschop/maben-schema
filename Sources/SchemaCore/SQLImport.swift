@@ -62,6 +62,21 @@ public enum SQLImport {
                 if let name = p.name() { current = name; databases.insert(name.lowercased()) }
             } else if p.take("CREATE") {
                 while p.takeAny(["TEMP", "TEMPORARY", "GLOBAL", "LOCAL", "UNLOGGED", "OR", "REPLACE", "FOREIGN"]) {}
+                // CREATE [UNIQUE] INDEX name ON table (columns): an index on a table read earlier.
+                let unique = p.take("UNIQUE")
+                _ = p.takeAny(["CLUSTERED", "NONCLUSTERED"])
+                if p.take("INDEX") {
+                    _ = p.take("CONCURRENTLY")
+                    if p.take("IF") { _ = p.take("NOT"); _ = p.take("EXISTS") }
+                    var name = ""
+                    if !p.peekAny(["ON"]) { name = p.scopedName()?.name ?? "" }
+                    guard p.take("ON") else { continue }
+                    _ = p.take("ONLY")
+                    guard let (scope, table) = p.scopedName(), let i = index[ParsedTable(name: table).key(group(scope))] else { continue }
+                    if p.take("USING") { p.advance() }
+                    tables[i].addIndex(name, p.plainNameList(), unique: unique)
+                    continue
+                }
                 if p.takeAny(["DATABASE", "SCHEMA"]) {
                     if p.take("IF") { _ = p.take("NOT"); _ = p.take("EXISTS") }
                     if let name = p.name() { databases.insert(name.lowercased()) }
@@ -125,6 +140,15 @@ public enum SQLImport {
                 a.defaultValue = c.defaultValue
                 a.definition = c.comment
                 e.attributes.append(a)
+            }
+            var indexNames: Set<String> = []
+            for x in t.indexes {
+                let found = x.columns.compactMap { name in e.attributes.first { $0.name.lowercased() == name.lowercased() }?.id }
+                guard found.count == x.columns.count else { continue }
+                var name = x.name.isEmpty ? d.freeIndexName(in: e, unique: x.unique) : x.name
+                var n = 2
+                while !indexNames.insert(name.lowercased()).inserted { name = "\(x.name.isEmpty ? "index" : x.name)_\(n)"; n += 1 }
+                e.indexes.append(Index(name: name, attributes: found, unique: x.unique))
             }
             ids[t.key(t.group)] = e.id
             byName[t.name.lowercased(), default: []].append(e.id)
@@ -213,6 +237,19 @@ public enum SQLImport {
         var columns: [ParsedColumn] = []
         var key: [String] = []
         var foreignKeys: [ParsedForeignKey] = []
+        var indexes: [(name: String, columns: [String], unique: Bool)] = []
+
+        /// An index over these columns. One unique column is that column's own "unique"; an index over an
+        /// expression (no plain column list) is left out.
+        mutating func addIndex(_ name: String, _ names: [String]?, unique: Bool) {
+            guard let names, !names.isEmpty else { return }
+            if unique, names.count == 1 {
+                if let i = columns.firstIndex(where: { $0.name.lowercased() == names[0].lowercased() }) { columns[i].unique = true }
+                return
+            }
+            guard !indexes.contains(where: { $0.columns.map { $0.lowercased() } == names.map { $0.lowercased() } && $0.unique == unique }) else { return }
+            indexes.append((name, names, unique))
+        }
 
         /// Everything between the outer brackets of CREATE TABLE.
         mutating func readBody(_ p: inout Parser) {
@@ -300,9 +337,14 @@ public enum SQLImport {
                 }
             } else if p.take("UNIQUE") {
                 _ = p.takeAny(["KEY", "INDEX"])
-                if p.peek != "(" { _ = p.name() }
-                let names = p.nameList()
-                if names.count == 1, let i = columns.firstIndex(where: { $0.name.lowercased() == names[0].lowercased() }) { columns[i].unique = true }
+                var name = ""
+                if p.peek != "(" { name = p.name() ?? "" }
+                addIndex(name, p.plainNameList(), unique: true)
+            } else if p.takeAny(["KEY", "INDEX"]) {
+                // MySQL: an index written inside the table.
+                var name = ""
+                if p.peek != "(" { name = p.name() ?? "" }
+                addIndex(name, p.plainNameList(), unique: false)
             }
         }
     }
@@ -464,6 +506,28 @@ public enum SQLImport {
                 _ = take(",")
             }
             return names
+        }
+
+        /// `(a, b DESC, c(20))` → ["a", "b", "c"]; nil when an entry isn't a column, such as `(lower(email))`.
+        mutating func plainNameList() -> [String]? {
+            guard take("(") else { return nil }
+            var names: [String] = []
+            var plain = true
+            while !atEnd, !take(")") {
+                if peek == "(" { plain = false; _ = group() } else if let n = name() {
+                    // A function call: a name with something other than a length after it.
+                    if peek == "(" {
+                        let inside = group()
+                        if inside.dropFirst().dropLast().contains(where: { !$0.isNumber }) { plain = false }
+                    }
+                    names.append(n)
+                } else { advance() }
+                while !atEnd, peek != ",", peek != ")" {
+                    if peek == "(" { _ = group() } else { advance() }
+                }
+                _ = take(",")
+            }
+            return plain ? names : nil
         }
 
         /// A bracketed group as text: `(10, 2)` → "(10,2)".

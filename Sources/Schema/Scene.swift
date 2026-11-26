@@ -67,6 +67,8 @@ struct EntityBox {
     /// How many of the rows are key rows; a line is drawn under them.
     let keyRows: Int
     let dependent: Bool
+    /// Its kind (Resource, Event…), written small in the header.
+    let kind: String
     /// Room on the left of each row for the key mark and "FK".
     let gutter: CGFloat
     let typeWidth: CGFloat
@@ -188,21 +190,26 @@ final class Scene {
 
     // MARK: Measuring
 
-    static func marks(_ a: Attribute) -> String {
+    static func marks(_ a: Attribute, indexes: [String] = []) -> String {
         var m: [String] = []
         if a.notNull && !a.isPrimaryKey { m.append("NN") }
         if a.unique { m.append("U") }
         if a.autoIncrement { m.append("AI") }
+        // The indexes it is in: AK1 (unique), IE1 (not).
+        m.append(contentsOf: indexes)
         return m.joined(separator: " ")
     }
 
     static func measure(_ e: Entity, in d: Diagram, pending: Bool, dependent: Bool) -> EntityBox {
         let display = d.display
         let title = d.entityName(e).isEmpty ? "Untitled" : d.entityName(e)
+        // An entity can show more or less than the rest of the diagram, and leave single attributes out.
+        let level = e.level ?? display.level
+        let visible = e.attributes.filter { !$0.hidden }
         let shown: [Attribute]
-        switch display.level {
-        case .all: shown = e.attributes
-        case .keys: shown = e.attributes.filter { $0.isPrimaryKey || $0.isForeignKey }
+        switch level {
+        case .all: shown = visible
+        case .keys: shown = visible.filter { $0.isPrimaryKey || $0.isForeignKey }
         case .namesOnly: shown = []
         }
         let gutter: CGFloat = shown.contains { $0.isPrimaryKey && $0.isForeignKey } ? 36 : 20
@@ -211,13 +218,13 @@ final class Scene {
         for a in shown {
             let name = d.attributeName(a)
             let type = display.showTypes ? a.type : ""
-            let marks = display.showConstraints ? Self.marks(a) : ""
+            let marks = display.showConstraints ? Self.marks(a, indexes: e.indexes.isEmpty ? [] : d.indexMarks(of: a.id, in: e)) : ""
             nameWidth = max(nameWidth, Metrics.width(name, a.isPrimaryKey ? Metrics.keyFont : Metrics.rowFont))
             typeWidth = max(typeWidth, Metrics.width(type, Metrics.typeFont))
             marksWidth = max(marksWidth, Metrics.width(marks, Metrics.tagFont))
             rows.append(RowBox(kind: .attribute(a), rect: .zero, name: name, type: type, marks: marks))
         }
-        if rows.isEmpty, display.level == .all, !pending {
+        if rows.isEmpty, level == .all, !pending {
             rows.append(RowBox(kind: .placeholder, rect: .zero, name: "No attributes yet", type: "", marks: ""))
             nameWidth = Metrics.width("No attributes yet", Metrics.rowFont)
         }
@@ -226,7 +233,9 @@ final class Scene {
         }
         var width = 10 + gutter + nameWidth + (typeWidth > 0 ? 18 + typeWidth : 0) + (marksWidth > 0 ? 8 + marksWidth : 0) + Metrics.padding
         // Room to type a whole line while a new attribute is being added.
-        width = max(width, Metrics.width(title, Metrics.nameFont) + Metrics.padding * 2, pending ? 250 : Metrics.minWidth)
+        let kind = e.kind
+        let kindWidth = kind.isEmpty ? 0 : Metrics.width(kind, Metrics.tagFont) + 10
+        width = max(width, Metrics.width(title, Metrics.nameFont) + Metrics.padding * 2 + kindWidth, pending ? 250 : Metrics.minWidth, CGFloat(e.width))
         width = ceil(width / Metrics.grid) * Metrics.grid
         let origin = CGPoint(x: e.position.x, y: e.position.y)
         var y = origin.y + Metrics.headerHeight + (rows.isEmpty ? 0 : 4)
@@ -237,7 +246,7 @@ final class Scene {
         let height = rows.isEmpty ? Metrics.headerHeight : y - origin.y + 4
         let keyRows = rows.prefix { $0.attribute?.isPrimaryKey == true }.count
         return EntityBox(entity: e, title: title, frame: CGRect(origin: origin, size: CGSize(width: width, height: ceil(height / 2) * 2)),
-                         rows: rows, keyRows: keyRows, dependent: dependent, gutter: gutter, typeWidth: typeWidth, marksWidth: marksWidth)
+                         rows: rows, keyRows: keyRows, dependent: dependent, kind: kind, gutter: gutter, typeWidth: typeWidth, marksWidth: marksWidth)
     }
 
     // MARK: Routing

@@ -9,7 +9,7 @@ import SwiftUI
 //   --select=<entity name>      selects an entity   --relationship=<n>  selects the nth relationship
 //   --sql  --palette  --import  shows the SQL panel, the ⌘K palette, the import sheet
 //   --notation=ie|idef1x  --names=logical|physical  --detail=all|keys|namesOnly  --dialect=<name>
-//   --no-inspector  --no-sidebar  --empty
+//   --no-inspector  --no-sidebar  --empty  --features (a diagram with one of everything, in place of the sample)
 //   --snapshot=<file.png> [--size=1360x860]   draws the window into a PNG without showing it, then quits
 //   --export=<file.png|pdf|sql|md|csv|asta|mschema> [--dark]   writes the sample (or --open=<file>, or --from-sql=<file.sql>) and quits;
 //                               with --dialect=mysql and --from-sql it rewrites a dump's tables for another database
@@ -246,7 +246,7 @@ enum MainMenu {
 @MainActor
 enum Headless {
     static func run() {
-        var diagram = Flags.has("empty") ? Diagram() : Sample.shop()
+        var diagram = Flags.has("empty") ? Diagram() : Flags.has("features") ? Sample.features() : Sample.shop()
         if let path = Flags.value("open") {
             do { diagram = try Diagram.decode(Data(contentsOf: URL(fileURLWithPath: path))) } catch { fail("Couldn't open \(path): \(error.localizedDescription)") }
         }

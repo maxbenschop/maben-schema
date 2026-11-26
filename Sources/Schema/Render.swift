@@ -57,14 +57,23 @@ enum Renderer {
         let target = state.connectTarget == box.id
         let shape = NSBezierPath(roundedRect: frame, xRadius: box.cornerRadius, yRadius: box.cornerRadius)
 
+        // Colours: the entity's own first, then its colour tag, then the colour of its kind.
+        let custom = NSColor(hex: box.entity.style.fill)
+        let tint = custom ?? box.entity.color.nsColor ?? NSColor(hex: d.typeColor(of: box.entity) ?? "")
+        let ink = NSColor(hex: box.entity.style.text) ?? MB.nsText
         ctx.saveGState()
         shape.addClip()
         MB.nsCard.setFill()
         frame.fill()
+        if let custom {
+            // A colour of your own fills the whole box, lightly, so the text stays readable in light and dark.
+            custom.withAlphaComponent(0.16).setFill()
+            frame.fill(using: .sourceOver)
+        }
         MB.nsCardHeader.setFill()
         box.headerRect.fill()
-        if let tint = box.entity.color.nsColor {
-            tint.withAlphaComponent(0.2).setFill()
+        if let tint {
+            tint.withAlphaComponent(custom == nil ? 0.2 : 0.34).setFill()
             box.headerRect.fill(using: .sourceOver)
             tint.setFill()
             CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: 3).fill()
@@ -75,8 +84,14 @@ enum Renderer {
         }
         ctx.restoreGState()
 
-        text(box.title, at: CGPoint(x: frame.minX + Metrics.padding, y: frame.minY + (Metrics.headerHeight - 16) / 2 + (box.entity.color == .none ? 0 : 1)),
-             font: Metrics.nameFont, color: MB.nsText, skip: state.editing == .entityName(box.id))
+        let lowered: CGFloat = tint == nil ? 0 : 1
+        text(box.title, at: CGPoint(x: frame.minX + Metrics.padding, y: frame.minY + (Metrics.headerHeight - 16) / 2 + lowered),
+             font: Metrics.nameFont, color: ink, skip: state.editing == .entityName(box.id))
+        // Its kind, small, at the right of the header.
+        if !box.kind.isEmpty, state.editing != .entityName(box.id) {
+            text(box.kind, at: CGPoint(x: frame.maxX - Metrics.padding - Metrics.width(box.kind, Metrics.tagFont), y: frame.minY + 11.5 + lowered),
+                 font: Metrics.tagFont, color: MB.nsDim)
+        }
 
         for (i, row) in box.rows.enumerated() where !state.namesOnly {
             let r = row.rect
@@ -99,7 +114,7 @@ enum Renderer {
                 if a.isForeignKey {
                     text("FK", at: CGPoint(x: x + (a.isPrimaryKey ? 1 : 0), y: r.midY - 5.5), font: Metrics.tagFont, color: MB.nsDim)
                 }
-                text(row.name, at: CGPoint(x: box.textX, y: r.minY + 4), font: a.isPrimaryKey ? Metrics.keyFont : Metrics.rowFont, color: MB.nsText)
+                text(row.name, at: CGPoint(x: box.textX, y: r.minY + 4), font: a.isPrimaryKey ? Metrics.keyFont : Metrics.rowFont, color: ink)
                 var right = frame.maxX - Metrics.padding
                 if box.marksWidth > 0 {
                     text(row.marks, at: CGPoint(x: right - box.marksWidth, y: r.midY - 5.5), font: Metrics.tagFont, color: MB.nsDim)
@@ -126,7 +141,7 @@ enum Renderer {
             MB.nsAccentInk.setStroke()
             shape.lineWidth = 1.5
         } else {
-            (state.hoverEntity == box.id && state.interactive ? MB.nsDim : MB.nsLineStrong).setStroke()
+            (state.hoverEntity == box.id && state.interactive ? MB.nsDim : NSColor(hex: box.entity.style.line) ?? MB.nsLineStrong).setStroke()
             shape.lineWidth = 1
         }
         shape.stroke()
@@ -138,7 +153,7 @@ enum Renderer {
         guard let ctx = NSGraphicsContext.current?.cgContext, link.points.count >= 2 else { return }
         let r = link.relationship
         let selected = state.selection.relationship == r.id
-        let color = selected ? MB.nsAccentInk : state.hoverLink == r.id ? MB.nsText : MB.nsWire
+        let color = selected ? MB.nsAccentInk : state.hoverLink == r.id ? MB.nsText : NSColor(hex: r.style.line) ?? MB.nsWire
         let width: CGFloat = selected ? 1.75 : 1.25
 
         // The line, with round corners. Non-identifying is dashed, in both notations.
@@ -209,32 +224,50 @@ enum Renderer {
         ctx.setLineCap(.round)
         let pEnd = End(ctx: ctx, at: link.points[0], side: link.parentSide, color: color, background: background)
         let cEnd = End(ctx: ctx, at: link.points[link.points.count - 1], side: link.childSide, color: color, background: background)
-        switch scene.diagram.display.notation {
-        case .ie:
-            if r.kind == .manyToMany {
-                pEnd.crowsFoot(); cEnd.crowsFoot()
-            } else {
-                // Parent end: exactly one, or zero or one when the child may do without.
-                pEnd.bar(7)
-                if r.parentOptional { pEnd.circle(15.5) } else { pEnd.bar(12) }
-                switch r.childCardinality {
-                case .zeroOrMore: cEnd.crowsFoot(); cEnd.circle(17)
-                case .oneOrMore: cEnd.crowsFoot(); cEnd.bar(16)
-                case .zeroOrOne: cEnd.bar(7); cEnd.circle(15.5)
-                case .exactlyOne: cEnd.bar(7); cEnd.bar(12)
-                }
+        if r.kind == .subtype {
+            // "Is a kind of": the category mark near the parent, the same in both notations. A circle with two
+            // lines under it when every parent is one of its kinds (complete), one line when not.
+            pEnd.category(complete: r.complete)
+            if let id = r.discriminator, let by = scene.diagram.entity(r.parent)?.attributes.first(where: { $0.id == id }) {
+                pEnd.note(scene.diagram.attributeName(by), along: 24)
             }
-        case .idef1x:
-            if r.kind == .manyToMany {
-                pEnd.dot(); cEnd.dot()
-            } else {
-                if r.parentOptional { pEnd.diamond() }
-                cEnd.dot()
-                switch r.childCardinality {
-                case .zeroOrMore: break
-                case .oneOrMore: cEnd.letter("P")
-                case .zeroOrOne: cEnd.letter("Z")
-                case .exactlyOne: cEnd.letter("1")
+        } else {
+            let count = r.childCardinality == .counted && !r.hideCardinality ? r.childCountText : ""
+            switch scene.diagram.display.notation {
+            case .ie:
+                if r.kind == .manyToMany {
+                    pEnd.crowsFoot(); cEnd.crowsFoot()
+                } else if r.hideCardinality {
+                    break
+                } else {
+                    // Parent end: exactly one, or zero or one when the child may do without.
+                    pEnd.bar(7)
+                    if r.parentOptional { pEnd.circle(15.5) } else { pEnd.bar(12) }
+                    let range = r.childRange
+                    if range.upper == 1 {
+                        cEnd.bar(7)
+                        if range.lower == 0 { cEnd.circle(15.5) } else { cEnd.bar(12) }
+                    } else {
+                        cEnd.crowsFoot()
+                        if range.lower == 0 { cEnd.circle(17) } else { cEnd.bar(16) }
+                    }
+                    if !count.isEmpty { cEnd.note(count, along: 26) }
+                }
+            case .idef1x:
+                if r.kind == .manyToMany {
+                    pEnd.dot(); cEnd.dot()
+                } else {
+                    if r.parentOptional { pEnd.diamond() }
+                    cEnd.dot()
+                    if !r.hideCardinality {
+                        switch r.childCardinality {
+                        case .zeroOrMore: break
+                        case .oneOrMore: cEnd.letter("P")
+                        case .zeroOrOne: cEnd.letter("Z")
+                        case .exactlyOne: cEnd.letter("1")
+                        case .counted: cEnd.note(count, along: 12)
+                        }
+                    }
                 }
             }
         }
@@ -246,7 +279,7 @@ enum Renderer {
     /// Where a relationship's name goes, and whether there is room for it between the marks at both ends.
     static func label(for link: LinkPath) -> (rect: CGRect, fits: Bool)? {
         let name = link.relationship.name
-        guard !name.isEmpty, let a = link.points.first, let b = link.points.last else { return nil }
+        guard !name.isEmpty, !link.relationship.hideName, let a = link.points.first, let b = link.points.last else { return nil }
         let w = Metrics.width(name, Metrics.labelFont)
         var c = link.labelCenter
         var fits = true
@@ -312,6 +345,23 @@ enum Renderer {
         func letter(_ s: String) {
             let p = point(15, -11)
             Renderer.text(s, at: CGPoint(x: p.x - 3, y: p.y - 6), font: Metrics.tagFont, color: color)
+        }
+        /// A few characters beside the line: a count, or the attribute that tells the kinds apart.
+        func note(_ s: String, along: CGFloat) {
+            let w = Metrics.width(s, Metrics.tagFont)
+            let p = point(along, side.horizontal ? -12 : 0)
+            let x = side.horizontal ? p.x - (side == .left ? w : 0) : p.x + 9
+            Renderer.text(s, at: CGPoint(x: x, y: p.y - 6), font: Metrics.tagFont, color: color)
+        }
+        /// The category mark: a circle on the line, and one or two lines across it on the child's side.
+        func category(complete: Bool) {
+            let c = point(13)
+            let rect = CGRect(x: c.x - 6, y: c.y - 6, width: 12, height: 12)
+            ctx.setFillColor(background.cgColor)
+            ctx.fillEllipse(in: rect); ctx.strokeEllipse(in: rect)
+            for d in complete ? [22.5, 26] as [CGFloat] : [22.5] as [CGFloat] {
+                ctx.move(to: point(d, -8)); ctx.addLine(to: point(d, 8)); ctx.strokePath()
+            }
         }
     }
 

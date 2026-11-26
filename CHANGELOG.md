@@ -5,6 +5,13 @@ releases as the GitHub release notes, and schema.maben.gg/changelog is built fro
 
 ## 0.2 · not released yet
 
+- Subtypes: a relationship can say "is a kind of", with the attribute that tells the kinds apart and whether the kinds are all there are
+- Indexes on an entity, unique or not, over one or more attributes, marked AK and IE on the diagram, written to the SQL and read from it
+- A relationship can have a name for each direction, a number of your own for "how many" (3, 2 to 5), a definition, and can point at a unique index of the parent in place of its key
+- Kinds of entity (Resource, Event, Summary or your own), each with its colour
+- Domains can have a default, be required, and sit under another domain; Add Several Domains takes one per line
+- Data types of your own, and the type an attribute gets when you type none
+- Other names, tags and links on entities, attributes and domains; groups in the entity list
 - Export for Astah (File menu, and ⌘K): an `.asta` file that Astah Professional opens with the same entities, attributes, keys, types, domains and relationships, in the same places and with the same lines, in the notation that was showing
 
 ## 0.1 · 20 November 2026

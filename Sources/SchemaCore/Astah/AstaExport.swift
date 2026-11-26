@@ -69,17 +69,22 @@ public enum AstaExport {
         var out: [String] = []
         func yes(_ b: Bool) -> String { b ? "yes" : "no" }
         for e in d.entities {
-            out.append("ENTITY \(e.name)|\(e.tableName)|\(e.definition)")
+            out.append("ENTITY \(e.name)|\(e.tableName)|\(e.definition)|\(e.kind)|\(e.alias1)|\(e.alias2)")
             for a in e.attributes {
                 let domain = d.domain(named: a.type)
                 let (base, length) = split(d.resolvedType(a.type))
                 let source = d.source(of: a).map { "\($0.parent.name).\($0.column.name)" } ?? ""
-                out.append("ATTR \(e.name).\(a.name)|\(a.columnName)|pk=\(yes(a.isPrimaryKey))|fk=\(yes(a.isForeignKey))|nn=\(yes(a.notNull || a.isPrimaryKey))|"
-                           + "\(base.isEmpty ? "VARCHAR" : base)|\(base.isEmpty ? "255" : length)|\(a.defaultValue)|\(domain?.name ?? "")|\(source)|\(a.definition)")
+                let inherited = domain.map { [$0] + d.ancestors(of: $0) } ?? []
+                let value = a.defaultValue.isEmpty ? inherited.first { !$0.defaultValue.isEmpty }?.defaultValue ?? "" : a.defaultValue
+                out.append("ATTR \(e.name).\(a.name)|\(a.columnName)|pk=\(yes(a.isPrimaryKey))|fk=\(yes(a.isForeignKey))|nn=\(yes(a.notNull || a.isPrimaryKey || inherited.contains(where: \.notNull)))|"
+                           + "\(base.isEmpty ? "VARCHAR" : base)|\(base.isEmpty ? "255" : length)|\(value)|\(domain?.name ?? "")|\(source)|\(a.definition)")
             }
-            for a in e.attributes where a.unique { out.append("INDEX \(e.name)|unique|\(a.name)") }
+            for index in indexes(of: e) {
+                let names = index.attributes.compactMap { id in e.attributes.first { $0.id == id }?.name }
+                out.append("INDEX \(e.name)|\(index.name)|\(index.unique ? "unique" : "not unique")|\(names.joined(separator: ","))")
+            }
         }
-        for r in d.relationships {
+        for r in d.relationships where r.kind != .subtype {
             guard let p = d.entity(r.parent), let c = d.entity(r.child) else { continue }
             let kind = r.kind == .identifying ? "identifying" : r.kind == .nonIdentifying ? "non-identifying" : "many-to-many"
             var many = "0orMore"
@@ -89,17 +94,45 @@ public enum AstaExport {
                 case .oneOrMore: many = "1orMore"
                 case .zeroOrOne: many = "0or1"
                 case .exactlyOne: many = "1"
+                case .counted: many = counted(r)
                 }
             }
             let keys = r.kind == .manyToMany ? [] : c.attributes.filter { $0.foreignKey?.relationship == r.id }.map(\.name).sorted()
-            out.append("REL \(p.name)>\(c.name)|\(r.name)|\(kind)|\(many)|parentRequired=\(yes(r.kind != .manyToMany && !r.parentOptional))|\(keys.joined(separator: ","))")
+            let index = r.parentIndex.flatMap { id in p.indexes.first { $0.id == id }?.name } ?? ""
+            out.append("REL \(p.name)>\(c.name)|\(r.name)|\(r.childName)|\(kind)|\(many)|parentRequired=\(yes(r.kind != .manyToMany && !r.parentOptional))|\(keys.joined(separator: ","))|\(index)|\(r.definition)")
+        }
+        for r in d.relationships where r.kind == .subtype {
+            guard let p = d.entity(r.parent), let c = d.entity(r.child) else { continue }
+            let by = r.discriminator.flatMap { id in p.attributes.first { $0.id == id }?.name } ?? ""
+            out.append("SUBTYPE \(p.name)>\(c.name)|\(r.name)|complete=\(yes(r.complete))|\(by)")
         }
         for domain in d.domains {
-            let (base, length) = split(domain.type)
-            out.append("DOMAIN \(domain.name)|\(base)|\(length)|\(domain.definition)")
+            let (base, length) = split(d.resolvedType(domain.name))
+            let parent = domain.parent.flatMap { d.domain($0)?.name } ?? ""
+            out.append("DOMAIN \(domain.name)|\(domain.columnTypeName)|\(base)|\(length)|nn=\(yes(domain.notNull))|\(domain.defaultValue)|\(parent)|\(domain.definition)")
         }
         out.append("DIAGRAM \(d.display.notation == .ie ? "IE" : "IDEF1X")|\(d.display.names == .physical ? "Physical Model" : "Logical Model")|boxes=\(d.entities.count)|lines=\(d.relationships.count)")
         return out.joined(separator: "\n") + "\n"
+    }
+
+    /// A count of your own as Astah writes it: `3`, `2..5`.
+    static func counted(_ r: Relationship) -> String {
+        let range = r.childRange
+        guard let upper = range.upper else { return range.lower == 0 ? "0orMore" : range.lower == 1 ? "1orMore" : "\(range.lower)..*" }
+        if range.lower == 0, upper == 1 { return "0or1" }
+        return upper == range.lower ? "\(upper)" : "\(range.lower)..\(upper)"
+    }
+
+    /// Every index of an entity as Astah gets it: its own, and one per attribute that is unique by itself.
+    static func indexes(of e: Entity) -> [Index] {
+        var out = e.indexes
+        var taken = Set(out.map { $0.name.lowercased() })
+        for a in e.attributes where a.unique {
+            var name = "ak_" + a.columnName, n = 2
+            while !taken.insert(name.lowercased()).inserted { name = "ak_\(a.columnName)_\(n)"; n += 1 }
+            out.append(Index(name: name, attributes: [a.id], unique: true))
+        }
+        return out
     }
 
     /// The types every Astah ER model starts with, and whether each takes a length and a precision.
@@ -413,6 +446,13 @@ final class AstaBuilder {
 
     private var typeModel: JObject!
     private var domainModel: JObject!
+    private var indexObjects: [UUID: JObject] = [:]
+
+    /// The two other names Astah keeps for anything with a name.
+    private func aliases(_ owner: JObject, _ first: String, _ second: String) {
+        if !first.isEmpty { tag(owner, "jude.multi_language.alias1", first) }
+        if !second.isEmpty { tag(owner, "jude.multi_language.alias2", second) }
+    }
     private var types: [String: JObject] = [:]
     private var domains: [String: JObject] = [:]
 
@@ -435,6 +475,16 @@ final class AstaBuilder {
         let profile = "<?xml version = \"1.0\" encoding = \"UTF-8\" standalone = \"yes\"?>\r\n"
         tag(project, "jude.profiles", profile + "<umlProfiles>\r\n <umlProfile>\r\n  <name>jude.profiles</name>\r\n </umlProfile>\r\n</umlProfiles>\r\n\r\n")
         tag(project, "jude.usericons", profile + "<mmUserIcon>\r\n <mmUserIconInfo>\r\n  <name>jude.usericons</name>\r\n </mmUserIconInfo>\r\n</mmUserIcon>\r\n\r\n")
+
+        // The kinds of entity, where Astah keeps them: nine places in the project's styles.
+        var styles: [(String, String)] = [("er.color.entity", "#FFFFCC"), ("er.color.entity.alpha", "FF")]
+        for i in 0..<9 {
+            let type = i < diagram.entityTypes.count ? diagram.entityTypes[i] : EntityType(name: "", color: "#FFFFFF")
+            styles.append(("er.entity.type.name.\(i)", type.name))
+            styles.append(("er.entity.type.color.\(i)", type.color.isEmpty ? "#FFFFFF" : type.color.uppercased()))
+            styles.append(("er.entity.type.color.\(i).alpha", "FF"))
+        }
+        project["styleMap"] = map(styles)
 
         let model = named("UModelImp", "ER Model")
         own(project, model)
@@ -460,15 +510,50 @@ final class AstaBuilder {
         tag(schema, "jude.er.schema", "true")
         tag(schema, "jude.er.default_schema", "true")
 
-        for d in diagram.domains {
-            let (base, length) = AstaExport.split(d.type)
-            let c = named("UClassifierImp", d.name, definition: d.definition)
-            own(domainModel, c)
-            tag(c, "jude.type", "er_Domain")
-            tag(c, "jude.domain.datatype", dataType(base).name)
-            tag(c, "jude.domain.modifier", length)
-            tag(c, "alias3", Naming.physical(d.name))
-            domains[d.name.lowercased()] = c
+        // Your own data types, with whether each takes a length.
+        for t in diagram.dataTypes where types[t.name.uppercased()] == nil && !t.name.isEmpty {
+            let c = named("UClassifierImp", t.name, definition: t.definition)
+            own(typeModel, c)
+            tag(c, "jude.type", "er_datatype")
+            tag(c, "jude.datatype.length", t.length == .none ? "None" : t.length == .required ? "Required" : "Optional")
+            tag(c, "jude.datatype.precision", t.length == .none ? "None" : "Optional")
+            tag(c, "jude.datatype.defaultLength", t.defaultLength)
+            types[t.name.uppercased()] = c
+        }
+
+        // Domains, a parent before the domains under it: a child domain belongs to its parent.
+        var waiting = diagram.domains
+        var byID: [UUID: JObject] = [:]
+        while !waiting.isEmpty {
+            var later: [Domain] = []
+            for d in waiting {
+                let parent = d.parent.flatMap { diagram.domain($0) }
+                if let parent, byID[parent.id] == nil, waiting.contains(where: { $0.id == parent.id }), !diagram.ancestors(of: parent).contains(where: { $0.id == d.id }) {
+                    later.append(d)
+                    continue
+                }
+                let (base, length) = AstaExport.split(diagram.resolvedType(d.name))
+                let c = named("UClassifierImp", d.name, definition: d.definition)
+                own(parent.flatMap { byID[$0.id] } ?? domainModel, c)
+                tag(c, "jude.type", "er_Domain")
+                tag(c, "jude.domain.datatype", dataType(base.isEmpty ? "VARCHAR" : base).name)
+                tag(c, "jude.domain.modifier", length)
+                tag(c, "alias3", d.columnTypeName)
+                if !d.defaultValue.isEmpty { tag(c, "jude.domain.default", d.defaultValue) }
+                aliases(c, d.alias1, d.alias2)
+                for t in d.tags where !t.name.isEmpty { tag(c, t.name, t.value) }
+                if d.notNull {
+                    let rule = named("UConstraintImp", "Not Null")
+                    rule["body"] = .object(expression("UBooleanExpression", "Not Null"))
+                    append(c, to: rule, "constrainedElement")
+                    append(rule, to: c, "constraint")
+                    own(domainModel, rule)
+                }
+                byID[d.id] = c
+                domains[d.name.lowercased()] = c
+            }
+            if later.count == waiting.count { break }
+            waiting = later
         }
 
         // Entities and their attributes.
@@ -477,8 +562,11 @@ final class AstaBuilder {
         for e in diagram.entities {
             let entity = named("EREntityImp", e.name, definition: e.definition)
             own(schema, entity)
-            tag(entity, "jude.erentity.kind", "")
+            tag(entity, "jude.erentity.kind", e.kind)
             tag(entity, "alias3", e.tableName)
+            aliases(entity, e.alias1, e.alias2)
+            for t in e.tags where !t.name.isEmpty { tag(entity, t.name, t.value) }
+            for (i, link) in e.links.enumerated() where !link.isEmpty { tag(entity, e.links.count == 1 ? "link" : "link\(i + 1)", link) }
             entityObjects[e.id] = entity
             for a in e.attributes {
                 let attribute = named("ERAttributeImp", a.name, definition: a.definition)
@@ -496,25 +584,31 @@ final class AstaBuilder {
                 tag(attribute, "jude.modifier", type == nil ? (base.isEmpty ? "255" : length) : AstaExport.split(diagram.resolvedType(a.type)).length)
                 tag(attribute, "alias3", a.columnName)
                 if a.autoIncrement { tag(attribute, "auto_increment", "true") }
+                aliases(attribute, a.alias1, a.alias2)
+                for t in a.tags where !t.name.isEmpty { tag(attribute, t.name, t.value) }
+                for (i, link) in a.links.enumerated() where !link.isEmpty { tag(attribute, a.links.count == 1 ? "link" : "link\(i + 1)", link) }
+                // What its domain brings along is written out, as Astah does when a domain is given to an attribute.
+                let inherited = diagram.domain(named: a.type).map { [$0] + diagram.ancestors(of: $0) } ?? []
+                let value = a.defaultValue.isEmpty ? inherited.first { !$0.defaultValue.isEmpty }?.defaultValue ?? "" : a.defaultValue
                 if a.isPrimaryKey { constraint("PRIMARY KEY", on: attribute, of: entity) }
-                if a.notNull || a.isPrimaryKey { constraint("NOT NULL", on: attribute, of: entity) }
+                if a.notNull || a.isPrimaryKey || inherited.contains(where: \.notNull) { constraint("NOT NULL", on: attribute, of: entity) }
                 if a.isForeignKey { constraint("FOREIGN KEY", on: attribute, of: entity) }
-                if !a.defaultValue.isEmpty { constraint("DEFAULT:" + a.defaultValue, on: attribute, of: entity) }
+                if !value.isEmpty { constraint("DEFAULT:" + value, on: attribute, of: entity) }
                 attributeObjects[a.id] = attribute
             }
-            // Unique is an index that Astah shows as an alternate key (AK).
-            var taken: Set<String> = []
-            for a in e.attributes where a.unique {
-                guard let attribute = attributeObjects[a.id] else { continue }
-                var name = "ak_" + a.columnName, n = 2
-                while !taken.insert(name).inserted { name = "ak_\(a.columnName)_\(n)"; n += 1 }
-                let index = named("ERIndexImp", name)
-                index["isKey"] = .bool(true)
-                index["isUnique"] = .bool(true)
+            // Indexes. Unique by itself is an index too, which Astah shows as an alternate key (AK).
+            for x in AstaExport.indexes(of: e) {
+                let index = named("ERIndexImp", x.name)
+                index["isKey"] = .bool(x.shown)
+                index["isUnique"] = .bool(x.unique)
                 index["parentEntity"] = .object(entity)
-                append(attribute, to: index, "erAttributes")
+                for id in x.attributes {
+                    guard let attribute = attributeObjects[id] else { continue }
+                    append(attribute, to: index, "erAttributes")
+                    append(index, to: attribute, "erIndexes")
+                }
                 append(index, to: entity, "erIndexes")
-                append(index, to: attribute, "erIndexes")
+                indexObjects[x.id] = index
             }
         }
 
@@ -522,13 +616,40 @@ final class AstaBuilder {
         var relationshipObjects: [UUID: JObject] = [:]
         for r in diagram.relationships {
             guard let parent = entityObjects[r.parent], let child = entityObjects[r.child] else { continue }
-            let relationship = named("ERRelationshipImp", r.name)
+            let columns: [(column: JObject, key: JObject)] = (diagram.entity(r.child)?.attributes ?? []).compactMap { a in
+                guard r.kind != .manyToMany, let fk = a.foreignKey, fk.relationship == r.id, let column = attributeObjects[a.id], let key = attributeObjects[fk.parentAttribute] else { return nil }
+                return (column, key)
+            }
+            if r.kind == .subtype {
+                // "Is a kind of": Astah's subtype relationship. The child's key columns are its foreign keys.
+                let subtype = named("ERSubtypeRelationshipImp", r.name, definition: r.definition)
+                own(schema, subtype)
+                tag(subtype, "alias3", r.physicalName.isEmpty ? Naming.physical(r.name) : r.physicalName)
+                subtype["supertype"] = .object(parent)
+                subtype["subtype"] = .object(child)
+                subtype["conclusive"] = .bool(r.complete)
+                append(subtype, to: parent, "specialization")
+                append(subtype, to: child, "generalization")
+                if let d = r.discriminator, let attribute = attributeObjects[d] {
+                    subtype["discriminatorAttribute"] = .object(attribute)
+                    append(subtype, to: attribute, "subtypeRelationships")
+                }
+                for (column, key) in columns {
+                    column["referencedPrimaryKey"] = .object(key)
+                    column["subTypeForeignKeyInv"] = .object(subtype)
+                    append(column, to: subtype, "subTypeForeignKeys")
+                }
+                relationshipObjects[r.id] = subtype
+                continue
+            }
+            let relationship = named("ERRelationshipImp", r.name, definition: r.definition)
             own(schema, relationship)
-            tag(relationship, "alias3", Naming.physical(r.name))
+            tag(relationship, "alias3", r.physicalName.isEmpty ? Naming.physical(r.name) : r.physicalName)
             if r.kind != .manyToMany {
                 if r.onDelete != .noAction { tag(relationship, "on_delete", r.onDelete.sql) }
                 if r.onUpdate != .noAction { tag(relationship, "on_update", r.onUpdate.sql) }
             }
+            for t in r.tags where !t.name.isEmpty { tag(relationship, t.name, t.value) }
             relationship["isIdentifying"] = .bool(r.kind == .identifying)
             func end(_ entity: JObject, _ verb: String, _ lower: Int32, _ upper: Int32) {
                 let e = named("ERRelationshipEndImp", verb)
@@ -543,23 +664,21 @@ final class AstaBuilder {
             }
             if r.kind == .manyToMany {
                 end(parent, r.name, 0, -1)
-                end(child, "", 0, -1)
+                end(child, r.childName, 0, -1)
             } else {
                 end(parent, r.name, r.parentOptional ? 0 : 1, 1)
-                switch r.childCardinality {
-                case .zeroOrMore: end(child, "", 0, -1)
-                case .oneOrMore: end(child, "", 1, -1)
-                case .zeroOrOne: end(child, "", 0, 1)
-                case .exactlyOne: end(child, "", 1, 1)
+                let range = r.childRange
+                end(child, r.childName, Int32(range.lower), range.upper.map { Int32($0) } ?? -1)
+                // A foreign key that copies a unique index of the parent points at that index.
+                if let id = r.parentIndex, let index = indexObjects[id] {
+                    relationship["erIndex"] = .object(index)
+                    append(relationship, to: index, "erRelationships")
                 }
-                if let c = diagram.entity(r.child) {
-                    for a in c.attributes {
-                        guard let fk = a.foreignKey, fk.relationship == r.id, let column = attributeObjects[a.id], let key = attributeObjects[fk.parentAttribute] else { continue }
-                        column["referencedPrimaryKey"] = .object(key)
-                        column["relationship"] = .object(relationship)
-                        append(column, to: key, "referencedForeignKeys")
-                        append(column, to: relationship, "foreignKeys")
-                    }
+                for (column, key) in columns {
+                    column["referencedPrimaryKey"] = .object(key)
+                    column["relationship"] = .object(relationship)
+                    append(column, to: key, "referencedForeignKeys")
+                    append(column, to: relationship, "foreignKeys")
                 }
             }
             relationshipObjects[r.id] = relationship
@@ -652,8 +771,12 @@ final class AstaBuilder {
             depth -= 1
             box["diagram"] = .object(sheet)
             box["model"] = .object(model)
-            var style = [("fill.color.alpha", "FF"), ("fill.color", AstaExport.fill(e.color) ?? "#FFFFCC")]
-            if e.color != .none { style.append(("isfilled.color", "true")) }
+            // Its own colour first, then its colour tag, then the colour of its kind.
+            let own = e.style.fill.isEmpty ? AstaExport.fill(e.color) : e.style.fill.uppercased()
+            var style = [("fill.color.alpha", "FF"), ("fill.color", own ?? diagram.typeColor(of: e)?.uppercased() ?? "#FFFFCC")]
+            if own != nil { style.append(("isfilled.color", "true")) }
+            if !e.style.line.isEmpty { style.append(("line.color", e.style.line.uppercased())) }
+            if !e.style.text.isEmpty { style.append(("font.color", e.style.text.uppercased())) }
             style.append(("er_displaylevel", level))
             box["styleMap"] = map(style)
             box["depth"] = .int(depth)
@@ -673,7 +796,7 @@ final class AstaBuilder {
 
         for r in diagram.relationships {
             guard let model = relationships[r.id], let from = boxes[r.parent], let to = boxes[r.child] else { continue }
-            let line = make("ERRelationshipPresentation")
+            let line = make(r.kind == .subtype ? "ERSubtypeRelationshipPresentation" : "ERRelationshipPresentation")
             depth -= 1
             line["diagram"] = .object(sheet)
             line["model"] = .object(model)
@@ -689,7 +812,24 @@ final class AstaBuilder {
             line["sourceEndY"] = .double(path.source.1)
             line["targetEndX"] = .double(path.target.0)
             line["targetEndY"] = .double(path.target.1)
-            if !path.bends.isEmpty { line["styleMap"] = map([("line.shape", "line_right_angle")]) }
+            var look: [(String, String)] = []
+            if !path.bends.isEmpty { look.append(("line.shape", "line_right_angle")) }
+            if !r.style.line.isEmpty { look.append(("line.color", r.style.line.uppercased())) }
+            if !look.isEmpty { line["styleMap"] = map(look) }
+            if r.kind == .subtype {
+                // The half circle Astah draws on a subtype's line is a small box of its own, kept with the line.
+                let all = [path.start] + path.bends + [path.end]
+                let middle = Point((all[0].x + all[all.count - 1].x) / 2, (all[0].y + all[all.count - 1].y) / 2)
+                let mark = make("LabelPresentation")
+                mark["compositeParent"] = .object(line)
+                mark["depth"] = .int(-1)
+                mark["changeId"] = .object(long(-1))
+                mark["location"] = .object(point("Pnt2d", middle.x - 10, middle.y - 5))
+                mark["width"] = .double(20)
+                mark["height"] = .double(10)
+                mark["label"] = .string("")
+                line["rect"] = .object(mark)
+            }
             append(line, to: from, "clients")
             observe(from, by: line)
             if to !== from {

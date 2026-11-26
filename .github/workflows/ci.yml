@@ -42,7 +42,17 @@ jobs:
           .build/debug/Schema --export="$out/shop.pdf" && head -c 4 "$out/shop.pdf" | grep -q "%PDF"
           .build/debug/Schema --export="$out/shop.asta" && unzip -l "$out/shop.asta" | grep -q " EntityStore$"
           .build/debug/Schema --export="$out/shop.mschema"
+          grep -q '"version" : 1' "$out/shop.mschema"
           .build/debug/Schema --open="$out/shop.mschema" --export="$out/again.sql" && cmp "$out/shop.sql" "$out/again.sql"
+      - name: A diagram with one of everything exports, and SQLite takes its SQL
+        run: |
+          out=$(mktemp -d)
+          .build/debug/Schema --features --dialect=sqlite --export="$out/all.sql" && sqlite3 :memory: < "$out/all.sql"
+          .build/debug/Schema --dialect=sqlite --export="$out/shop.sql" && sqlite3 :memory: < "$out/shop.sql"
+          grep -q "CREATE INDEX ix_person_name_kind" "$out/all.sql"
+          .build/debug/Schema --features --export="$out/all.mschema" && grep -q '"version" : 2' "$out/all.mschema"
+          .build/debug/Schema --open="$out/all.mschema" --dialect=sqlite --export="$out/again.sql" && cmp "$out/all.sql" "$out/again.sql"
+          .build/debug/Schema --features --export="$out/all.asta" && unzip -l "$out/all.asta" | grep -q " EntityStore$"
       - name: Scripts parse
         run: |
           zsh -n release.sh

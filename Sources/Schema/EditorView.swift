@@ -37,6 +37,7 @@ struct EditorView: View {
         .sheet(item: $store.sheet) { sheet in
             switch sheet {
             case .importSQL: ImportSheet(store: store).tint(MB.accent)
+            case .addDomains: AddDomainsSheet(store: store).tint(MB.accent)
             }
         }
     }
@@ -281,8 +282,25 @@ struct Sidebar: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     header("Entities", count: store.diagram.entities.count, help: "New entity (⇧⌘N)") { store.newEntity() }
-                    ForEach(entities) { e in
+                    // Entities with a group are listed under it; the rest come first.
+                    let groups = Dictionary(grouping: entities, by: \.package)
+                    ForEach(groups[""] ?? []) { e in
                         EntityRow(store: store, entity: e)
+                    }
+                    ForEach(groups.keys.filter { !$0.isEmpty }.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }, id: \.self) { group in
+                        Button { store.selection = .entities(Set((groups[group] ?? []).map(\.id))) } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "folder").font(.system(size: 10)).foregroundStyle(MB.dim)
+                                Text(group).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(MB.muted).lineLimit(1)
+                                Spacer()
+                            }
+                            .padding(.leading, 14).padding(.trailing, 8).frame(height: 24).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Select every entity in \(group)")
+                        ForEach(groups[group] ?? []) { e in
+                            EntityRow(store: store, entity: e).padding(.leading, 10)
+                        }
                     }
                     if store.diagram.entities.isEmpty {
                         Text("None yet").font(.system(size: 12)).foregroundStyle(MB.dim).padding(.horizontal, 14).padding(.vertical, 6)
@@ -291,8 +309,12 @@ struct Sidebar: View {
                     }
                     header("Domains", count: store.diagram.domains.count, help: "New domain: a type with a name, to reuse") { store.newDomain() }
                         .padding(.top, 10)
-                    ForEach(store.diagram.domains) { d in
+                    // A domain under another is listed under it, a step in.
+                    ForEach(store.diagram.domains.filter { $0.parent == nil || store.diagram.domain($0.parent!) == nil }) { d in
                         DomainRow(store: store, domain: d)
+                        ForEach(store.diagram.domains.filter { store.diagram.ancestors(of: $0).contains { $0.id == d.id } }) { child in
+                            DomainRow(store: store, domain: child).padding(.leading, CGFloat(store.diagram.ancestors(of: child).count) * 10)
+                        }
                     }
                     if store.diagram.domains.isEmpty {
                         Text("A domain is a type with a name, such as email = VARCHAR(255). Use the name as an attribute’s type.")
@@ -374,7 +396,7 @@ struct DomainRow: View {
                 Image(systemName: "textformat.abc").font(.system(size: 10)).foregroundStyle(MB.accentInk).frame(width: 12)
                 Text(domain.name).font(.system(size: 12.5)).foregroundStyle(MB.text).lineLimit(1)
                 Spacer(minLength: 4)
-                Text(domain.type).font(.system(size: 11)).foregroundStyle(MB.dim).lineLimit(1)
+                Text(store.diagram.resolvedType(domain.name)).font(.system(size: 11)).foregroundStyle(MB.dim).lineLimit(1)
             }
             .padding(.horizontal, 8).frame(height: 26)
             .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(selected ? MB.selected : hovering ? MB.hover : .clear))
@@ -384,6 +406,9 @@ struct DomainRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .contextMenu {
+            Button("New Domain Under It") { store.newDomain(under: domain.id) }
+            Button("Add Several Domains…") { store.sheet = .addDomains }
+            Divider()
             Button("Delete", role: .destructive) { store.selection = .domain(domain.id); store.deleteSelection() }
         }
     }
@@ -427,6 +452,7 @@ struct PaletteView: View {
         let commands: [Item] = [
             Item(id: "c.new", title: "New Entity", detail: "⇧⌘N", symbol: "plus.rectangle") { store.newEntity() },
             Item(id: "c.domain", title: "New Domain", detail: "", symbol: "textformat.abc") { store.newDomain() },
+            Item(id: "c.domains", title: "Add Several Domains…", detail: "", symbol: "text.badge.plus") { store.sheet = .addDomains },
             Item(id: "c.tidy", title: "Tidy Up", detail: "⌃⌘L", symbol: "wand.and.stars") { store.tidyUp() },
             Item(id: "c.fit", title: "Zoom to Fit", detail: "⌘1", symbol: "arrow.up.left.and.arrow.down.right") { store.canvas?.zoomToFit() },
             Item(id: "c.sql", title: store.showSQL ? "Hide SQL" : "Show SQL", detail: "⌥⌘S", symbol: "chevron.left.forwardslash.chevron.right") { store.showSQL.toggle() },
@@ -522,5 +548,50 @@ struct PaletteView: View {
         let action = list[index].action
         store.palette = false
         action()
+    }
+}
+
+/// Several domains at once: one per line, typed like an attribute.
+struct AddDomainsSheet: View {
+    @ObservedObject var store: DiagramStore
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    private var found: [Domain] { store.domains(from: text) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Add several domains").font(.system(size: 15, weight: .semibold)).foregroundStyle(MB.text)
+                Text("One per line: a name and its type. Add not null or = a default after it, and < another domain’s name to put it under that one.")
+                    .font(.system(size: 12)).foregroundStyle(MB.muted).fixedSize(horizontal: false, vertical: true)
+            }
+            TextEditor(text: $text)
+                .font(MB.mono).scrollContentBackground(.hidden).focused($focused).padding(6)
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text("email varchar(255) not null\nmoney decimal(10,2) = 0\nprice < money")
+                            .font(MB.mono).foregroundStyle(MB.dim.opacity(0.6)).padding(.horizontal, 11).padding(.vertical, 6).allowsHitTesting(false)
+                    }
+                }
+                .frame(minHeight: 180)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(MB.wash(0.05)))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(MB.line))
+                .accessibilityLabel("Domains to add")
+            HStack(spacing: 8) {
+                Text(found.isEmpty ? " " : "\(found.count) \(found.count == 1 ? "domain" : "domains")").font(.system(size: 12)).foregroundStyle(MB.dim)
+                Spacer()
+                Button("Cancel") { store.sheet = nil }.buttonStyle(.mbQuiet).keyboardShortcut(.cancelAction)
+                Button("Add") {
+                    store.addDomains(found)
+                    store.sheet = nil
+                }
+                .buttonStyle(.mbPrimary).keyboardShortcut(.defaultAction).disabled(found.isEmpty)
+            }
+        }
+        .padding(18)
+        .frame(width: 520, height: 360)
+        .background(MB.card)
+        .onAppear { focused = true }
     }
 }

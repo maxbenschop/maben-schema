@@ -3,7 +3,8 @@
 # file (through its API, no window), and compares what Astah found with what was in the diagram, line by line.
 # Astah then validates each file, changes it and saves it again, and draws it as a PNG to look at.
 #
-#   Resources/astah/check.sh                 the sample, in each notation and level of detail
+#   Resources/astah/check.sh                 the sample in each notation and level of detail, and a diagram
+#                                            with one of everything (subtypes, indexes, kinds, domains, counts)
 #   Resources/astah/check.sh my.mschema …    your own diagrams (or .sql files) as well
 #
 # Needs Astah Professional (the 20-day trial will do). It is found in /Applications, or set ASTAH_APP to the
@@ -17,7 +18,9 @@ JAVA="$APP/Contents/runtime/Contents/Home/bin"
 CP="$APP/Contents/Java/astah-api.jar:$APP/Contents/Java/astah-pro.jar:$APP/Contents/Java/lib/*:$APP/Contents/Java/lib/batik/*:$APP/Contents/Java/lib/gvml/*"
 OUT=${ASTAH_OUT:-$(mktemp -d)}
 mkdir -p "$OUT/classes"
+rm -f "$OUT/classes/AstahCheck.class"
 "$JAVA/javac" -nowarn -d "$OUT/classes" -cp "$APP/Contents/Java/astah-api.jar" Resources/astah/AstahCheck.java 2>&1 | grep -v "^Note:" || true
+[ -f "$OUT/classes/AstahCheck.class" ] || { echo "AstahCheck.java didn't compile against this Astah."; exit 2; }
 swift build --product Schema >/dev/null
 BIN="$(swift build --show-bin-path)/Schema"
 quiet() { grep -v -E "^[0-9]{4}-[0-9]{2}-[0-9]{2} .*<(INFO|WARN)>" || true; }
@@ -42,6 +45,8 @@ check sample-idef1x --notation=idef1x
 check sample-physical --names=physical
 check sample-keys --detail=keys
 check sample-names --detail=namesOnly
+check features --features
+check features-idef1x --features --notation=idef1x
 check empty --empty
 n=0
 for file in "$@"; do

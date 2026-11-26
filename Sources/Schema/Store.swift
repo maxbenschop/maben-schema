@@ -47,7 +47,7 @@ final class DiagramStore: ObservableObject {
     /// The attribute whose extra fields are open in the inspector.
     @Published var expandedAttribute: UUID?
 
-    enum Sheet: String, Identifiable { case importSQL; var id: String { rawValue } }
+    enum Sheet: String, Identifiable { case importSQL, addDomains; var id: String { rawValue } }
 
     weak var undoManager: UndoManager?
     weak var canvas: CanvasView?
@@ -204,7 +204,7 @@ final class DiagramStore: ObservableObject {
     /// Adds an attribute from a typed line (see `QuickEntry`). Returns its id, or nil when the line was empty.
     @discardableResult
     func addAttribute(_ line: String, to entity: UUID, after: UUID? = nil) -> UUID? {
-        guard var a = QuickEntry.parse(line, domains: diagram.domains), let e = diagram.entity(entity) else { return nil }
+        guard var a = QuickEntry.parse(line, domains: diagram.domains, types: diagram.dataTypes, fallback: diagram.defaultType), let e = diagram.entity(entity) else { return nil }
         // The first "id" in an entity without a key is the key.
         if !a.isPrimaryKey, e.primaryKey.isEmpty, Naming.physical(a.name) == "id" {
             a.isPrimaryKey = true
@@ -217,7 +217,7 @@ final class DiagramStore: ObservableObject {
 
     /// Applies a retyped line to an attribute. A foreign key column only takes the name: the rest follows its parent.
     func updateAttribute(_ id: UUID, in entity: UUID, line: String) {
-        guard let parsed = QuickEntry.parse(line, domains: diagram.domains) else { return }
+        guard let parsed = QuickEntry.parse(line, domains: diagram.domains, types: diagram.dataTypes, fallback: diagram.defaultType) else { return }
         edit("Change Attribute") { d in
             d.update(attribute: id, in: entity) { a in
                 if a.isForeignKey {
@@ -273,6 +273,14 @@ final class DiagramStore: ObservableObject {
         edit("Delete Attribute") { $0.update(entity: entity) { $0.attributes.removeAll { $0.id == id } } }
     }
 
+    /// A new index on an entity, over the selected attribute when there is one.
+    func addIndex(to entity: UUID, unique: Bool) {
+        guard let e = diagram.entity(entity) else { return }
+        var index = Index(name: diagram.freeIndexName(in: e, unique: unique), unique: unique)
+        if let a = selectedAttribute, e.attributes.contains(where: { $0.id == a }) { index.attributes = [a] }
+        edit("Add Index") { $0.update(entity: entity) { $0.indexes.append(index) } }
+    }
+
     // MARK: Relationships
 
     @discardableResult
@@ -308,7 +316,10 @@ final class DiagramStore: ObservableObject {
         case .relationship(let id):
             edit("Delete Relationship") { d in d.relationships.removeAll { $0.id == id } }
         case .domain(let id):
-            edit("Delete Domain") { d in d.domains.removeAll { $0.id == id } }
+            edit("Delete Domain") { d in
+                d.domains.removeAll { $0.id == id }
+                for i in d.domains.indices where d.domains[i].parent == id { d.domains[i].parent = nil }
+            }
         }
     }
 
@@ -584,12 +595,45 @@ final class DiagramStore: ObservableObject {
 
     // MARK: Domains
 
-    func newDomain() {
+    func newDomain(under parent: UUID? = nil) {
         var name = "domain", n = 2
         while diagram.domain(named: name) != nil { name = "domain\(n)"; n += 1 }
-        let domain = Domain(name: name, type: "VARCHAR(255)")
+        var domain = Domain(name: name, type: parent == nil ? "VARCHAR(255)" : "")
+        domain.parent = parent
         edit("New Domain") { $0.domains.append(domain) }
         selection = .domain(domain.id)
+        showInspector = true
+    }
+
+    /// Domains read from typed lines, one each: `email varchar(255) not null`, `money decimal(10,2) = 0`,
+    /// `price < money` (under another domain, with that one's type).
+    func domains(from text: String) -> [Domain] {
+        var out: [Domain] = []
+        for line in text.split(whereSeparator: \.isNewline) {
+            var rest = String(line)
+            var parentName = ""
+            if let r = rest.range(of: "<") {
+                parentName = rest[r.upperBound...].trimmingCharacters(in: .whitespaces)
+                rest = String(rest[..<r.lowerBound])
+            }
+            // A name alone, under a parent, has the parent's type: nothing is guessed for it.
+            let alone = rest.split(separator: " ").count == 1
+            guard let a = QuickEntry.parse(rest, types: diagram.dataTypes, fallback: diagram.defaultType) else { continue }
+            guard diagram.domain(named: a.name) == nil, !out.contains(where: { $0.name.lowercased() == a.name.lowercased() }) else { continue }
+            var domain = Domain(name: a.name, type: alone && !parentName.isEmpty ? "" : a.type)
+            domain.notNull = a.notNull
+            domain.defaultValue = a.defaultValue
+            let key = parentName.lowercased()
+            domain.parent = out.first { $0.name.lowercased() == key }?.id ?? diagram.domain(named: parentName)?.id
+            out.append(domain)
+        }
+        return out
+    }
+
+    func addDomains(_ list: [Domain]) {
+        guard !list.isEmpty else { return }
+        edit("Add Domains") { $0.domains.append(contentsOf: list) }
+        if let last = list.last { selection = .domain(last.id) }
         showInspector = true
     }
 
