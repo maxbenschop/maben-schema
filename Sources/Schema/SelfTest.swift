@@ -131,6 +131,8 @@ enum SelfTest {
         let scene = Scene(store.diagram)
         check((Picture.png(scene, dark: false, transparent: false)?.count ?? 0) > 2000, "PNG export has content")
         check(String(data: Picture.pdf(scene, dark: true, transparent: true).prefix(4), encoding: .ascii) == "%PDF", "PDF export is a PDF")
+        let asta = AstaExport.data(for: store.diagram, layout: scene.astaLayout)
+        check(asta.count > 4000 && asta.prefix(2) == Data("PK".utf8), "the Astah export is a ZIP with content")
         let back = try? Diagram.decode(store.diagram.encoded())
         check(back == store.diagram, "the file reads back the same")
 

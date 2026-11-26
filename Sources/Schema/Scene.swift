@@ -178,6 +178,14 @@ final class Scene {
         return rect
     }
 
+    /// Where everything is drawn, for the Astah export: it keeps the same boxes and lines.
+    var astaLayout: AstaExport.Layout {
+        var layout = AstaExport.Layout()
+        for b in boxes { layout.frames[b.id] = Rect(Double(b.frame.minX), Double(b.frame.minY), Double(b.frame.width), Double(b.frame.height)) }
+        for l in links { layout.routes[l.id] = l.points.map { Point(Double($0.x), Double($0.y)) } }
+        return layout
+    }
+
     // MARK: Measuring
 
     static func marks(_ a: Attribute) -> String {

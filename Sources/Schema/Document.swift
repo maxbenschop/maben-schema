@@ -177,7 +177,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         case #selector(renameSelection(_:)): return store.selection.singleEntity != nil || store.selection.relationship != nil
         case #selector(duplicateSelection(_:)): return !store.selection.entityIDs.isEmpty
         case #selector(alignSelection(_:)): return store.selection.entityIDs.count > 1
-        case #selector(tidyUp(_:)), #selector(exportSQL(_:)), #selector(exportImage(_:)), #selector(copyImage(_:)), #selector(exportDictionary(_:)):
+        case #selector(tidyUp(_:)), #selector(exportSQL(_:)), #selector(exportImage(_:)), #selector(copyImage(_:)), #selector(exportDictionary(_:)),
+             #selector(exportAstah(_:)):
             return !d.entities.isEmpty
         case #selector(setNotation(_:)): item.state = (item.representedObject as? String) == d.display.notation.rawValue ? .on : .off
         case #selector(setNames(_:)): item.state = (item.representedObject as? String) == d.display.names.rawValue ? .on : .off
@@ -195,11 +196,11 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
 
     @objc func importSQL(_ sender: Any?) { store.sheet = .importSQL }
 
-    private var baseName: String {
+    fileprivate var baseName: String {
         (document?.displayName ?? "diagram").replacingOccurrences(of: ".\(schemaExtension)", with: "")
     }
 
-    private func save(_ name: String, types: [UTType], accessory: NSView? = nil, write: @escaping (URL) throws -> Void) {
+    fileprivate func save(_ name: String, types: [UTType], accessory: NSView? = nil, write: @escaping (URL) throws -> Void) {
         guard let window else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = name
@@ -254,6 +255,19 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         save(baseName + " data dictionary.md", types: [UTType(filenameExtension: "md") ?? .plainText, .commaSeparatedText]) { url in
             let text = url.pathExtension.lowercased() == "csv" ? Report.csv(for: d) : Report.markdown(for: d, title: title)
             try text.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+}
+
+extension EditorWindowController {
+    /// The diagram as an Astah Professional project: the same entities, keys, relationships, places and lines.
+    @objc func exportAstah(_ sender: Any?) {
+        let d = store.diagram
+        let layout = Scene(d).astaLayout
+        var options = AstaExport.Options()
+        options.diagramName = baseName
+        save(baseName + "." + AstaExport.fileExtension, types: [UTType(filenameExtension: AstaExport.fileExtension) ?? .data]) { url in
+            try AstaExport.data(for: d, layout: layout, options: options).write(to: url)
         }
     }
 }

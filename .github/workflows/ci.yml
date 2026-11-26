@@ -40,6 +40,7 @@ jobs:
           out=$(mktemp -d)
           .build/debug/Schema --export="$out/shop.sql" && grep -q "CREATE TABLE customer (" "$out/shop.sql"
           .build/debug/Schema --export="$out/shop.pdf" && head -c 4 "$out/shop.pdf" | grep -q "%PDF"
+          .build/debug/Schema --export="$out/shop.asta" && unzip -l "$out/shop.asta" | grep -q " EntityStore$"
           .build/debug/Schema --export="$out/shop.mschema"
           .build/debug/Schema --open="$out/shop.mschema" --export="$out/again.sql" && cmp "$out/shop.sql" "$out/again.sql"
       - name: Scripts parse

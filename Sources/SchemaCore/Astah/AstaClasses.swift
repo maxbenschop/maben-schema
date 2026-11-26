@@ -1,0 +1,323 @@
+// The classes Astah Professional writes into an .asta file, as that file's own class descriptors give them:
+// name, serialVersionUID, flags and superclass on one line, then one line per field with its type code, name,
+// type signature and the value the field has in a file Astah saved itself ("!" marks a field the exporter sets).
+// "~" stands for "JP.co.esm.caddies." (and "JP/co/esm/caddies/" in a signature).
+//
+// Read from files saved by Astah Professional 12.0 (model version 44). `Resources/astah/make-class-table.py`
+// writes this file from such samples; it is not edited by hand.
+
+enum AstaClasses {
+    static let table = #"""
+~jomt.jmodel.ModelManageInfo -4849569514030136901 2 -
+ I currentModelVersion - p:44
+ J lastModifiedTime - !p:1795693075544
+ I maxModelVersion - p:44
+ L currentModelProducer Ljava/lang/String; s:"A.P"
+ L judeVersionHistory Ljava/util/HashMap; map
+ L sortedVersionHistory Ljava/util/List; list
+java.util.HashMap 362498820763181265 3 -
+ F loadFactor - p:0.75
+ I threshold - !p:12
+java.util.ArrayList 8683452581122892189 3 -
+ I size - !p:0
+[Ljava.lang.String; -5921575005990323385 2 -
+~golf.model.EntityRoot -8923638540981700012 2 -
+ L entry Ljava/util/HashMap; map
+ L store Ljava/util/HashSet; !
+~uml.ModelManagement.UModelImp -6810303441827904595 2 ~uml.ModelManagement.UPackageImp
+ L styleMap Ljava/util/Map; map
+~uml.ModelManagement.UPackageImp -3914343964309052282 2 ~uml.Foundation.Core.UNamespaceImp
+ Z abst - p:false
+ Z leaf - p:false
+ Z root - p:true
+ L generalization Ljava/util/List; list
+ L referedElem Ljava/util/List; list
+ L specialization Ljava/util/List; list
+~uml.Foundation.Core.UNamespaceImp -4870648327327272487 2 ~uml.Foundation.Core.UModelElementImp
+ L ownedElementOwnership Ljava/util/List; list
+~uml.Foundation.Core.UModelElementImp 6503275615930165386 2 ~uml.Foundation.Core.UElementImp
+ L annotatedElementInv Ljava/util/List; list
+ L behavior Ljava/util/List; list
+ L clientDependency Ljava/util/List; list
+ L constraint Ljava/util/List; list
+ L definition L~/uml/Foundation/DataTypes/UUninterpreted; text:UUninterpreted
+ L elemRefer Ljava/util/List; null
+ L elementResidence Ljava/util/List; list
+ L name L~/uml/Foundation/DataTypes/UName; text:UName
+ L namespaceOwnership L~/uml/Foundation/Core/UElementOwnership; !
+ L presentation Ljava/util/List; list
+ L representsInv Ljava/util/List; list
+ L stereotype Ljava/util/List; list
+ L supplierDependency Ljava/util/List; list
+ L taggedValue Ljava/util/List; list
+ L uPackage Ljava/util/List; null
+~uml.Foundation.Core.UElementImp -7331155944743662933 2 ~uml.util.ExObservable
+ Z unsolvedFlag - p:false
+ I version - p:0
+ L id Ljava/lang/String; !
+ L uid Ljava/lang/String; null
+~uml.util.ExObservable -4030011647484958863 3 -
+ Z ex_changed - !p:true
+~uml.Foundation.DataTypes.UUninterpreted 4567259601029369395 2 -
+ L body Ljava/lang/String; !
+~uml.Foundation.DataTypes.UName -1949240144812983484 2 -
+ L body Ljava/lang/String; !
+~uml.Foundation.ExtensionMechanisms.UTaggedValueImp -2616926138076397907 2 ~uml.Foundation.Core.UElementImp
+ L invRequiredTag L~/uml/Foundation/ExtensionMechanisms/UStereotype; null
+ L invTaggedValue L~/uml/Foundation/Core/UModelElement; !
+ L tag L~/uml/Foundation/DataTypes/UName; text:UName
+ L value L~/uml/Foundation/DataTypes/UUninterpreted; text:UUninterpreted
+~uml.Foundation.Core.UElementOwnershipImp -7565289473570912737 2 ~uml.Foundation.Core.UElementImp
+ L namespace L~/uml/Foundation/Core/UNamespace; !
+ L ownedElement L~/uml/Foundation/Core/UModelElement; !
+ L visibility L~/uml/Foundation/DataTypes/UVisibilityKind; kind:UVisibilityKind:public
+~uml.Foundation.Core.UClassifierImp 5859948139903192440 2 ~uml.Foundation.Core.UNamespaceImp
+ Z abst - p:false
+ Z active - p:false
+ Z leaf - p:false
+ Z root - p:false
+ L actualInv Ljava/util/List; list
+ L associationEnd Ljava/util/List; list
+ L baseInv Ljava/util/List; list
+ L behavioralFeature Ljava/util/List; list
+ L classifierInv Ljava/util/List; list
+ L connector Ljava/util/List; list
+ L defaultInv Ljava/util/List; list
+ L generalization Ljava/util/List; list
+ L ownedTemplateSignatrue L~/uml/Foundation/Core/UTemplateSignature; null
+ L owningDefault L~/uml/Foundation/Core/UTemplateParameter; null
+ L owningParameter L~/uml/Foundation/Core/UTemplateParameter; null
+ L owningSubstition L~/uml/Foundation/Core/UTemplateParameterSubstition; null
+ L participant Ljava/util/List; list
+ L port Ljava/util/List; list
+ L realization Ljava/util/List; list
+ L representedClassifierInv Ljava/util/List; list
+ L specialization Ljava/util/List; list
+ L specification Ljava/util/List; list
+ L structuralFeature Ljava/util/List; list
+ L templateBinding Ljava/util/List; list
+ L templateParameter L~/uml/Foundation/Core/UTemplateParameter; null
+ L typeInv Ljava/util/List; list
+~uml.Foundation.Core.UConstraintImp 3326680590417734581 2 ~uml.Foundation.Core.UModelElementImp
+ L body L~/uml/Foundation/DataTypes/UBooleanExpression; !
+ L constrainedElement Ljava/util/List; list
+ L invariantInv Ljava/util/List; list
+~uml.Foundation.DataTypes.UVisibilityKind 7214656188605742422 2 -
+ L label Ljava/lang/String; !
+~uml.Foundation.DataTypes.UBooleanExpression -1669164807746231334 2 ~uml.Foundation.DataTypes.UExpression
+~uml.Foundation.DataTypes.UExpression 8271663839569138121 2 ~uml.Foundation.Core.UParameterableElementImp
+ L body L~/uml/Foundation/DataTypes/UUninterpreted; text:UUninterpreted
+ L language L~/uml/Foundation/DataTypes/UName; text:UName
+~uml.Foundation.Core.UParameterableElementImp -3842146790738189745 2 ~uml.Foundation.Core.UModelElementImp
+ L actualInv Ljava/util/List; list
+ L defaultInv Ljava/util/List; list
+ L owningParameter L~/uml/Foundation/Core/UTemplateParameter; null
+~er.ERAttributeImp 3561232075199484970 2 ~uml.Foundation.Core.UAttributeImp
+ L erIndexes Ljava/util/List; list
+ L identifiedAttribute L~/er/ERAttribute; null
+ L referencedForeignKeys Ljava/util/List; list
+ L referencedPrimaryKey L~/er/ERAttribute; !
+ L relationship L~/er/ERRelationship; !
+ L subTypeForeignKeyInv L~/er/ERSubtypeRelationship; !
+ L subtypeRelationships Ljava/util/List; list
+~uml.Foundation.Core.UAttributeImp -3567593160696680151 2 ~uml.Foundation.Core.UPropertyImp
+ L aggregation L~/uml/Foundation/DataTypes/UAggregationKind; kind:UAggregationKind:none
+ L associationEnd L~/uml/Foundation/Core/UAssociationEnd; null
+ L attributeLinks Ljava/util/List; list
+ L initialValue L~/uml/Foundation/DataTypes/UExpression; !
+~uml.Foundation.Core.UPropertyImp 1747762371469704294 2 ~uml.Foundation.Core.UStructuralFeatureImp
+ L connectorEnd Ljava/util/List; list
+ L partWithPortInv Ljava/util/List; list
+~uml.Foundation.Core.UStructuralFeatureImp 1936240100926438770 2 ~uml.Foundation.Core.UFeatureImp
+ L changeable L~/uml/Foundation/DataTypes/UChangeableKind; kind:UChangeableKind:none
+ L multiplicity L~/uml/Foundation/DataTypes/UMultiplicity; !
+ L targetScope L~/uml/Foundation/DataTypes/UScopeKind; kind:UScopeKind:instance
+ L type L~/uml/Foundation/Core/UClassifier; !
+~uml.Foundation.Core.UFeatureImp 8252669096293347135 2 ~uml.Foundation.Core.UModelElementImp
+ L owner L~/uml/Foundation/Core/UClassifier; !
+ L ownerScope L~/uml/Foundation/DataTypes/UScopeKind; kind:UScopeKind:instance
+ L visibility L~/uml/Foundation/DataTypes/UVisibilityKind; !
+~er.EREntityImp -8569327821110185818 2 ~uml.Foundation.Core.UClassifierImp
+ L erIndexes Ljava/util/List; list
+~jomt.jmodel.EREntityPresentation -1860934300237796418 2 ~jomt.jmodel.ClassifierPresentation
+ Z alternateKeyVisibility - p:true
+ Z foreignKeySignVisibility - p:true
+ Z inversionEntryVisibility - p:true
+ Z isIdentifyingChild - !p:false
+ Z nullOptionVisibility - p:false
+ Z typeAndLengthVisibility - p:false
+~jomt.jmodel.ClassifierPresentation -6727406759728391645 2 ~jomt.jmodel.LabelPresentation
+ Z allAttributeVisibility - p:true
+ Z allEnumerationLiteralVisibility - p:false
+ Z allOperationVisibility - p:true
+ Z attributeConstraintVisibility - p:true
+ Z attributeInitValueVisibility - p:false
+ Z attributeStereotypeVisibility - p:true
+ Z attributeTypeVisibility - p:true
+ Z boundClassTemplateParameterNameVisibility - p:false
+ Z boundClassTemplateParameterVisibility - p:true
+ I classType - p:0
+ Z enumerationLiteralValueVisibility - p:false
+ Z iconNotation - p:false
+ I interfaceType - p:0
+ Z isActive - p:false
+ Z isClassNameItalic - p:false
+ Z isHideName - p:false
+ Z isTemplateParameterMutiline - p:false
+ Z operationConstraintVisibility - p:true
+ Z operationStereotypeVisibility - p:true
+ Z parameterTypeVisibility - p:true
+ Z parameterVisibility - p:true
+ I pathVisibility - p:0
+ Z returnTypeVisibility - p:true
+ Z templateParameterVisibility - p:true
+ Z visibilityKindVisibility - p:true
+ L invisibleFeatures Ljava/util/List; null
+ L nameFont Ljava/awt/Font; null
+ L subElements Ljava/util/List; list
+~jomt.jmodel.LabelPresentation -5404483991848190661 2 ~jomt.jmodel.RectPresentation
+ Z doAutoResize - p:true
+ Z visibility - !p:true
+ L label Ljava/lang/String; !
+~jomt.jmodel.RectPresentation -582497952433499079 2 ~jomt.jmodel.JomtPresentation
+ D height - !p:62.3984375
+ D width - !p:80.0
+ L baseColor Ljava/awt/Color; null
+~jomt.jmodel.JomtPresentation -7508818022374904276 2 ~uml.Foundation.Core.UPresentation
+ Z constraintVisibility - p:true
+ I depth - !p:-1
+ I notationType - p:0
+ L changeId Ljava/lang/Long; long
+ L compositeParent L~/uml/Foundation/Core/IUPresentation; !
+ L container L~/jomt/jmodel/IRectPresentation; null
+ L iconID Ljava/lang/String; null
+ L localMovement L~/golf/geom2D/Vec2d; pt:Vec2d
+ L location L~/golf/geom2D/Pnt2d; pt:Pnt2d
+~uml.Foundation.Core.UPresentation 4069247657887637795 2 ~uml.util.ExObservable
+ Z stereotypeVisibility - p:true
+ Z unsolvedFlag - p:false
+ I version - p:0
+ L clients Ljava/util/List; list
+ L diagram L~/uml/Foundation/Core/UDiagram; !
+ L extensionProperties Ljava/util/Map; null
+ L hyperlinks Ljava/util/List; list
+ L id Ljava/lang/String; !
+ L miniIcons Ljava/util/List; null
+ L model L~/uml/Foundation/Core/UModelElement; !
+ L servers Ljava/util/List; list
+ L styleMap Ljava/util/Map; !
+ L uid Ljava/lang/String; null
+~jomt.jmodel.ERRelationshipPresentation 8246674056750993271 2 ~jomt.jmodel.AssociationPresentation
+~jomt.jmodel.AssociationPresentation -2430874883564498188 2 ~jomt.jmodel.BinaryRelationPresentation
+ Z multiplicityVisibility - p:true
+ I nameDirectionReverse - p:0
+ Z nameDirectionVisible - p:true
+ Z qualifierBoxATypeVisibility - p:true
+ Z qualifierBoxBTypeVisibility - p:true
+ Z roleNameVisibility - p:true
+ L multiplicityAPresentation L~/jomt/jmodel/ILabelPresentation; null
+ L multiplicityBPresentation L~/jomt/jmodel/ILabelPresentation; null
+ L qualifierBoxAPresentation L~/jomt/jmodel/IQualifierBoxPresentation; null
+ L qualifierBoxBPresentation L~/jomt/jmodel/IQualifierBoxPresentation; null
+ L roleAConstraintPresentations Ljava/util/List; null
+ L roleAPresentation L~/jomt/jmodel/ILabelPresentation; null
+ L roleBConstraintPresentations Ljava/util/List; null
+ L roleBPresentation L~/jomt/jmodel/ILabelPresentation; null
+~jomt.jmodel.BinaryRelationPresentation -280041293397631763 2 ~jomt.jmodel.PathPresentation
+ Z rightAngle - p:false
+ D sourceEndX - !p:0.5
+ D sourceEndY - p:0.5
+ D targetEndX - !p:0.5
+ D targetEndY - p:0.5
+ Z visibility - p:true
+~jomt.jmodel.PathPresentation -3921316546713049945 2 ~jomt.jmodel.JomtPresentation
+ [ allPoints [L~/golf/geom2D/Pnt2d; !
+ L constraintPresentations Ljava/util/List; null
+ L namePresentation L~/jomt/jmodel/ILabelPresentation; !
+ [ outerPoints [L~/golf/geom2D/Pnt2d; !
+ [ points [L~/golf/geom2D/Pnt2d; !
+ L stereotypePresentation L~/jomt/jmodel/ILabelPresentation; null
+ L stereotypePresentations Ljava/util/List; list
+~er.UERDiagramImp 3921288585312873042 2 ~uml.Foundation.Core.UDiagramImp
+ Z alignStartPos - p:true
+ L displayLevel Ljava/lang/String; s:"attribute"
+ L modelType Ljava/lang/String; !
+ L notation Ljava/lang/String; !
+~uml.Foundation.Core.UDiagramImp 2440481016904270269 2 ~uml.Foundation.Core.UModelElementImp
+ L styleMap Ljava/util/Map; null
+ L type Ljava/lang/String; s:"ER Diagram"
+~er.ERRelationshipImp -1601608082830970740 2 ~uml.Foundation.Core.UAssociationImp
+ Z isIdentifying - !p:false
+ L erIndex L~/er/ERIndex; !
+ L foreignKeys Ljava/util/List; list
+~uml.Foundation.Core.UAssociationImp 2729608666100405302 2 ~uml.Foundation.Core.URelationshipImp
+ L connection Ljava/util/List; list
+ L connectorInv Ljava/util/List; list
+ L links Ljava/util/List; list
+~uml.Foundation.Core.URelationshipImp -7595204780880960020 2 ~uml.Foundation.Core.UModelElementImp
+~er.ERRelationshipEndImp -7288984575304156546 2 ~uml.Foundation.Core.UAssociationEndImp
+~uml.Foundation.Core.UAssociationEndImp 2842182190444714548 2 ~uml.Foundation.Core.UPropertyImp
+ Z navigable - p:false
+ Z ordered - p:false
+ L aggregation L~/uml/Foundation/DataTypes/UAggregationKind; kind:UAggregationKind:none
+ L association L~/uml/Foundation/Core/UAssociation; !
+ L changeable L~/uml/Foundation/DataTypes/UChangeableKind; null
+ L initialValue L~/uml/Foundation/DataTypes/UExpression; !
+ L linkEnds Ljava/util/List; list
+ L multiplicity L~/uml/Foundation/DataTypes/UMultiplicity; null
+ L navigableType Ljava/lang/String; s:"unspecified navigable"
+ L qualifier Ljava/util/List; list
+ L specification Ljava/util/List; list
+ L targetScope L~/uml/Foundation/DataTypes/UScopeKind; null
+ L type L~/uml/Foundation/Core/UClassifier; null
+ L visibility L~/uml/Foundation/DataTypes/UVisibilityKind; null
+~uml.Foundation.DataTypes.UScopeKind -5444178176734825717 2 -
+ L label Ljava/lang/String; s:"instance"
+~uml.Foundation.DataTypes.UChangeableKind 7325085696726097661 2 -
+ L label Ljava/lang/String; s:"none"
+~uml.Foundation.DataTypes.UMultiplicity 7663152683801487786 2 -
+ L id Ljava/lang/String; !
+ L multiplicityRange Ljava/util/List; list
+ L uid Ljava/lang/String; null
+~uml.Foundation.DataTypes.UMultiplicityRange -7034479319225695075 2 -
+ I lower - !p:0
+ I upper - !p:1
+ L id Ljava/lang/String; !
+ L lowerValue Ljava/lang/String; s:""
+ L uid Ljava/lang/String; null
+ L upperValue Ljava/lang/String; s:""
+~uml.Foundation.DataTypes.UAggregationKind -259514805478361755 2 -
+ L label Ljava/lang/String; s:"none"
+java.lang.Long 4290774380558885855 2 java.lang.Number
+ J value - !p:3
+java.lang.Number -8742448824652078965 2 -
+~golf.geom2D.Vec2d 7359967703503917941 2 ~golf.geom2D.Tpl2d
+~golf.geom2D.Tpl2d -9113352173891309436 3 java.awt.geom.Point2D$Double
+java.awt.geom.Point2D$Double 6150783262733311327 2 -
+ D x - !p:0.0
+ D y - !p:0.0
+~golf.geom2D.Pnt2d 6850356293460176920 2 ~golf.geom2D.Tpl2d
+[L~golf.geom2D.Pnt2d; -4098897649432066074 2 -
+~jomt.jmodel.ERSubtypeRelationshipPresentation -965263804371251085 2 ~jomt.jmodel.GeneralizationPresentation
+ L rect L~/jomt/jmodel/ILabelPresentation; !
+~jomt.jmodel.GeneralizationPresentation 6962151558466775836 2 ~jomt.jmodel.BinaryRelationPresentation
+~er.ERSubtypeRelationshipImp 5032827536977637604 2 ~uml.Foundation.Core.UGeneralizationImp
+ Z conclusive - p:true
+ I group - p:0
+ L discriminatorAttribute L~/er/ERAttribute; !
+ L subTypeForeignKeys Ljava/util/List; list
+~uml.Foundation.Core.UGeneralizationImp 4597647080788130460 2 ~uml.Foundation.Core.URelationshipImp
+ L discriminator L~/uml/Foundation/DataTypes/UName; text:UName
+ L subtype L~/uml/Foundation/Core/UGeneralizableElement; !
+ L supertype L~/uml/Foundation/Core/UGeneralizableElement; !
+~er.ERIndexImp 1412407629293066224 2 ~uml.Foundation.Core.UModelElementImp
+ Z isKey - !p:true
+ Z isUnique - !p:false
+ L erAttributes Ljava/util/List; list
+ L erRelationships Ljava/util/List; list
+ L parentEntity L~/er/EREntity; !
+~jomt.jmodel.TextPresentation -8871990796453639829 2 ~jomt.jmodel.LabelPresentation
+ L text Ljava/lang/String; !
+java.util.HashSet -5024744406713321676 3 -
+"""#
+}

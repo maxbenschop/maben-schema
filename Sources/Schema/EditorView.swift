@@ -435,6 +435,7 @@ struct PaletteView: View {
             Item(id: "c.exportimg", title: "Export Image…", detail: "⌥⌘E", symbol: "photo", action: send(#selector(W.exportImage(_:)))),
             Item(id: "c.copyimg", title: "Copy Diagram as Image", detail: "⇧⌘C", symbol: "doc.on.doc", action: send(#selector(W.copyImage(_:)))),
             Item(id: "c.dict", title: "Export Data Dictionary…", detail: "", symbol: "tablecells", action: send(#selector(W.exportDictionary(_:)))),
+            Item(id: "c.astah", title: "Export for Astah…", detail: ".asta", symbol: "square.and.arrow.up.on.square", action: send(#selector(W.exportAstah(_:)))),
             Item(id: "c.notation", title: store.diagram.display.notation == .ie ? "Switch to IDEF1X" : "Switch to Crow’s Foot", detail: "notation", symbol: "arrow.triangle.branch") {
                 store.edit("Change Notation") { $0.display.notation = $0.display.notation == .ie ? .idef1x : .ie }
             },
