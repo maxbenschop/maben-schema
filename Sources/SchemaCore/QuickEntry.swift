@@ -20,7 +20,9 @@ public enum QuickEntry {
         "SMALLINT", "FLOAT", "DOUBLE", "CHAR(1)", "TIME", "BLOB",
     ]
 
-    public static func parse(_ line: String, domains: [Domain] = []) -> Attribute? {
+    /// `types`: data types of your own, read like the known ones. `fallback`: the type when none is typed and the
+    /// name doesn't say (empty: `VARCHAR(255)`).
+    public static func parse(_ line: String, domains: [Domain] = [], types: [DataType] = [], fallback: String = "") -> Attribute? {
         var text = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         var a = Attribute(name: "")
@@ -69,6 +71,11 @@ public enum QuickEntry {
             } else if let d = domains.first(where: { $0.name.lowercased() == last.lowercased() }) {
                 a.type = d.name
                 words.removeLast()
+            } else if types.contains(where: { $0.name.uppercased() == base }) {
+                // Your own type: with its usual length when it needs one and none was typed.
+                let type = types.first { $0.name.uppercased() == base }!
+                a.type = last.contains("(") ? canonical(last) : type.spelled
+                words.removeLast()
             } else if knownTypes.contains(base) {
                 a.type = canonical(last)
                 words.removeLast()
@@ -80,7 +87,7 @@ public enum QuickEntry {
         name = name.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return nil }
         a.name = name
-        if a.type.isEmpty { a.type = guessType(for: name) }
+        if a.type.isEmpty { a.type = guessType(for: name, fallback: fallback) }
         a.notNull = a.isPrimaryKey || nullable == false
         return a
     }
@@ -135,7 +142,7 @@ public enum QuickEntry {
         return (base == "STRING" ? "VARCHAR" : base) + rest
     }
 
-    public static func guessType(for name: String) -> String {
+    public static func guessType(for name: String, fallback: String = "") -> String {
         let n = Naming.physical(name)
         let words = Set(n.split(separator: "_").map(String.init))
         if n == "id" || n.hasSuffix("_id") || words.contains("count") || words.contains("quantity") || words.contains("qty")
@@ -149,6 +156,6 @@ public enum QuickEntry {
         if words.contains("description") || words.contains("body") || words.contains("notes") || words.contains("content")
             || words.contains("comment") || words.contains("bio") { return "TEXT" }
         if words.contains("uuid") || words.contains("guid") { return "UUID" }
-        return "VARCHAR(255)"
+        return fallback.trimmingCharacters(in: .whitespaces).isEmpty ? "VARCHAR(255)" : fallback.trimmingCharacters(in: .whitespaces)
     }
 }

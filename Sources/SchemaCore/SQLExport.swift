@@ -51,6 +51,9 @@ public enum SQLExport {
             if table.key.count > 1 {
                 lines.append("    PRIMARY KEY (" + table.key.map { quote($0, dialect) }.joined(separator: ", ") + ")")
             }
+            for unique in table.uniques {
+                lines.append("    CONSTRAINT \(quote(unique.name, dialect)) UNIQUE (" + unique.columns.map { quote($0, dialect) }.joined(separator: ", ") + ")")
+            }
             for key in table.foreignKeys {
                 // A parent that comes later in the script (a circle of references) is added with ALTER TABLE at
                 // the end. SQLite can't do that, and doesn't need to: it accepts a table that doesn't exist yet.
@@ -73,6 +76,11 @@ public enum SQLExport {
                 text += table.comment.split(separator: "\n").map { "-- " + $0 }.joined(separator: "\n") + "\n"
             }
             text += "CREATE TABLE \(quote(table.name, dialect)) (\n" + body.joined(separator: "\n") + "\n);"
+            // Indexes that aren't unique come after their table; a unique one is a constraint inside it, so a
+            // foreign key can point at it.
+            for index in table.indexes {
+                text += "\nCREATE INDEX \(quote(index.name, dialect)) ON \(quote(table.name, dialect)) (" + index.columns.map { quote($0, dialect) }.joined(separator: ", ") + ");"
+            }
             out.append(Section(entity: table.entity, text: text))
             created.insert(table.name)
         }
@@ -110,6 +118,8 @@ public enum SQLExport {
         var columns: [Column] = []
         var key: [String] = []
         var foreignKeys: [ForeignKey] = []
+        var uniques: [(name: String, columns: [String])] = []
+        var indexes: [(name: String, columns: [String])] = []
     }
 
     static func tables(for d: Diagram, dialect: Dialect) -> [Table] {
@@ -123,8 +133,12 @@ public enum SQLExport {
             return name
         }
         func column(_ a: Attribute) -> Column {
-            Column(name: a.columnName, type: map(d.resolvedType(a.type), dialect), notNull: a.notNull, unique: a.unique,
-                   autoIncrement: a.autoIncrement, defaultValue: a.defaultValue, comment: a.definition)
+            // A domain brings its default and "required" along, where the attribute doesn't say itself.
+            let domain = d.domain(named: a.type)
+            let inherited = domain.map { [$0] + d.ancestors(of: $0) } ?? []
+            return Column(name: a.columnName, type: map(d.resolvedType(a.type), dialect), notNull: a.notNull || inherited.contains(where: \.notNull), unique: a.unique,
+                          autoIncrement: a.autoIncrement,
+                          defaultValue: a.defaultValue.isEmpty ? inherited.first { !$0.defaultValue.isEmpty }?.defaultValue ?? "" : a.defaultValue, comment: a.definition)
         }
         var byID: [UUID: Entity] = [:]
         for e in d.entities { byID[e.id] = e }
@@ -134,15 +148,21 @@ public enum SQLExport {
             var t = Table(entity: e.id, name: e.tableName, comment: e.definition)
             t.columns = e.attributes.map(column)
             t.key = e.primaryKey.map(\.columnName)
+            for index in e.indexes {
+                let columns = index.attributes.compactMap { id in e.attributes.first { $0.id == id }?.columnName }
+                guard !columns.isEmpty else { continue }
+                let name = free(index.name.isEmpty ? "ix_\(e.tableName)" : index.name)
+                if index.unique { t.uniques.append((name, columns)) } else { t.indexes.append((name, columns)) }
+            }
             for r in incoming[e.id] ?? [] {
                 guard let parent = byID[r.parent] else { continue }
-                // Columns in the order of the parent's key.
-                let pairs: [(String, String)] = parent.primaryKey.compactMap { key in
+                // Columns in the order of the parent's key (or of the unique index it copies).
+                let pairs: [(String, String)] = Diagram.keyAttributes(of: r, in: parent).compactMap { key in
                     e.attributes.first { $0.foreignKey?.relationship == r.id && $0.foreignKey?.parentAttribute == key.id }
                         .map { ($0.columnName, key.columnName) }
                 }
                 guard !pairs.isEmpty else { continue }
-                t.foreignKeys.append(ForeignKey(name: free("fk_\(e.tableName)_\(pairs.count == 1 ? pairs[0].0 : parent.tableName)"),
+                t.foreignKeys.append(ForeignKey(name: free(r.physicalName.isEmpty ? "fk_\(e.tableName)_\(pairs.count == 1 ? pairs[0].0 : parent.tableName)" : r.physicalName),
                                                 columns: pairs.map(\.0), table: parent.tableName, references: pairs.map(\.1),
                                                 onDelete: r.onDelete, onUpdate: r.onUpdate))
             }

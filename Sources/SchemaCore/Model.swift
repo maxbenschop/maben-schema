@@ -8,6 +8,90 @@ public struct Point: Codable, Equatable, Hashable {
     public static let zero = Point(0, 0)
 }
 
+/// Notes while a diagram is written to a file: whether it holds anything a version 1 app wouldn't know.
+final class FormatUse {
+    var newer = false
+    static let key = CodingUserInfoKey(rawValue: "gg.maben.schema.formatUse")!
+}
+
+/// Writes the fields that came after version 1 only when they hold something. A diagram that uses none of them
+/// is written exactly as version 1 wrote it, and says so, so an older app still opens it.
+struct Added<Key: CodingKey> {
+    var container: KeyedEncodingContainer<Key>
+    let use: FormatUse?
+
+    init(_ encoder: Encoder, _ container: KeyedEncodingContainer<Key>) {
+        self.container = container
+        use = encoder.userInfo[FormatUse.key] as? FormatUse
+    }
+
+    mutating func put<T: Encodable & Equatable>(_ value: T, _ key: Key, unless standard: T) throws {
+        guard value != standard else { return }
+        use?.newer = true
+        try container.encode(value, forKey: key)
+    }
+}
+
+/// A name with a value, free to use: `owner` = `sales`. Astah calls these tagged values.
+public struct Tag: Codable, Equatable, Hashable {
+    public var name: String
+    public var value: String
+
+    public init(name: String, value: String = "") {
+        self.name = name
+        self.value = value
+    }
+}
+
+/// Colours of one thing on the canvas, as `#RRGGBB`. Empty means: as everything else is drawn.
+public struct Style: Codable, Equatable, Hashable {
+    public var fill = ""
+    public var line = ""
+    public var text = ""
+
+    public init(fill: String = "", line: String = "", text: String = "") {
+        self.fill = fill
+        self.line = line
+        self.text = text
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fill = try c.decodeIfPresent(String.self, forKey: .fill) ?? ""
+        line = try c.decodeIfPresent(String.self, forKey: .line) ?? ""
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+    }
+
+    public var isPlain: Bool { fill.isEmpty && line.isEmpty && text.isEmpty }
+}
+
+/// An index on an entity: one or more of its attributes, unique or not.
+public struct Index: Codable, Identifiable, Equatable, Hashable {
+    public var id: UUID
+    public var name: String
+    public var attributes: [UUID]
+    public var unique: Bool
+    /// Marked on the diagram: an alternate key (AK) when unique, an inversion entry (IE) when not.
+    public var shown: Bool
+
+    public init(id: UUID = UUID(), name: String, attributes: [UUID] = [], unique: Bool = false, shown: Bool = true) {
+        self.id = id
+        self.name = name
+        self.attributes = attributes
+        self.unique = unique
+        self.shown = shown
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        attributes = try c.decodeIfPresent([UUID].self, forKey: .attributes) ?? []
+        unique = try c.decodeIfPresent(Bool.self, forKey: .unique) ?? false
+        shown = try c.decodeIfPresent(Bool.self, forKey: .shown) ?? true
+    }
+}
+
 /// Marks a column that a relationship made: it copies one key column of the parent.
 public struct ForeignKeyLink: Codable, Equatable, Hashable {
     public var relationship: UUID
@@ -37,6 +121,19 @@ public struct Attribute: Codable, Identifiable, Equatable, Hashable {
     public var defaultValue: String
     public var definition: String
     public var foreignKey: ForeignKeyLink?
+    /// Two more names for it, such as the name in another language.
+    public var alias1 = ""
+    public var alias2 = ""
+    public var tags: [Tag] = []
+    /// Web addresses or files that say more about it.
+    public var links: [String] = []
+    /// Not drawn in its entity's box (it is still in the entity, and in the SQL).
+    public var hidden = false
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, physicalName, type, isPrimaryKey, notNull, unique, autoIncrement, defaultValue, definition, foreignKey
+        case alias1, alias2, tags, links, hidden
+    }
 
     public init(id: UUID = UUID(), name: String, physicalName: String = "", type: String = "", isPrimaryKey: Bool = false,
                 notNull: Bool = false, unique: Bool = false, autoIncrement: Bool = false, defaultValue: String = "",
@@ -67,6 +164,32 @@ public struct Attribute: Codable, Identifiable, Equatable, Hashable {
         defaultValue = try c.decodeIfPresent(String.self, forKey: .defaultValue) ?? ""
         definition = try c.decodeIfPresent(String.self, forKey: .definition) ?? ""
         foreignKey = try c.decodeIfPresent(ForeignKeyLink.self, forKey: .foreignKey)
+        alias1 = try c.decodeIfPresent(String.self, forKey: .alias1) ?? ""
+        alias2 = try c.decodeIfPresent(String.self, forKey: .alias2) ?? ""
+        tags = try c.decodeIfPresent([Tag].self, forKey: .tags) ?? []
+        links = try c.decodeIfPresent([String].self, forKey: .links) ?? []
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(physicalName, forKey: .physicalName)
+        try c.encode(type, forKey: .type)
+        try c.encode(isPrimaryKey, forKey: .isPrimaryKey)
+        try c.encode(notNull, forKey: .notNull)
+        try c.encode(unique, forKey: .unique)
+        try c.encode(autoIncrement, forKey: .autoIncrement)
+        try c.encode(defaultValue, forKey: .defaultValue)
+        try c.encode(definition, forKey: .definition)
+        try c.encodeIfPresent(foreignKey, forKey: .foreignKey)
+        var a = Added(encoder, c)
+        try a.put(alias1, .alias1, unless: "")
+        try a.put(alias2, .alias2, unless: "")
+        try a.put(tags, .tags, unless: [])
+        try a.put(links, .links, unless: [])
+        try a.put(hidden, .hidden, unless: false)
     }
 
     public var isForeignKey: Bool { foreignKey != nil }
@@ -87,6 +210,26 @@ public struct Entity: Codable, Identifiable, Equatable {
     public var position: Point
     public var color: EntityColor
     public var attributes: [Attribute]
+    /// What kind of thing it is, one of the diagram's entity types (Resource, Event, Summary…). Empty: none.
+    public var kind = ""
+    /// The group it is listed under in the entity list.
+    public var package = ""
+    public var indexes: [Index] = []
+    public var alias1 = ""
+    public var alias2 = ""
+    public var tags: [Tag] = []
+    public var links: [String] = []
+    /// Its own colours, over the colour tag.
+    public var style = Style()
+    /// Its own width when you made it wider than it needs to be. Zero: as wide as its text.
+    public var width = 0.0
+    /// How much of it is drawn, when that differs from the rest of the diagram.
+    public var level: DetailLevel?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, physicalName, definition, position, color, attributes
+        case kind, package, indexes, alias1, alias2, tags, links, style, width, level
+    }
 
     public init(id: UUID = UUID(), name: String, physicalName: String = "", definition: String = "", position: Point = .zero,
                 color: EntityColor = .none, attributes: [Attribute] = []) {
@@ -108,6 +251,38 @@ public struct Entity: Codable, Identifiable, Equatable {
         position = try c.decodeIfPresent(Point.self, forKey: .position) ?? .zero
         color = try c.decodeIfPresent(EntityColor.self, forKey: .color) ?? .none
         attributes = try c.decodeIfPresent([Attribute].self, forKey: .attributes) ?? []
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? ""
+        package = try c.decodeIfPresent(String.self, forKey: .package) ?? ""
+        indexes = try c.decodeIfPresent([Index].self, forKey: .indexes) ?? []
+        alias1 = try c.decodeIfPresent(String.self, forKey: .alias1) ?? ""
+        alias2 = try c.decodeIfPresent(String.self, forKey: .alias2) ?? ""
+        tags = try c.decodeIfPresent([Tag].self, forKey: .tags) ?? []
+        links = try c.decodeIfPresent([String].self, forKey: .links) ?? []
+        style = try c.decodeIfPresent(Style.self, forKey: .style) ?? Style()
+        width = try c.decodeIfPresent(Double.self, forKey: .width) ?? 0
+        level = try c.decodeIfPresent(DetailLevel.self, forKey: .level)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(physicalName, forKey: .physicalName)
+        try c.encode(definition, forKey: .definition)
+        try c.encode(position, forKey: .position)
+        try c.encode(color, forKey: .color)
+        try c.encode(attributes, forKey: .attributes)
+        var a = Added(encoder, c)
+        try a.put(kind, .kind, unless: "")
+        try a.put(package, .package, unless: "")
+        try a.put(indexes, .indexes, unless: [])
+        try a.put(alias1, .alias1, unless: "")
+        try a.put(alias2, .alias2, unless: "")
+        try a.put(tags, .tags, unless: [])
+        try a.put(links, .links, unless: [])
+        try a.put(style, .style, unless: Style())
+        try a.put(width, .width, unless: 0)
+        try a.put(level, .level, unless: nil)
     }
 
     public var tableName: String { physicalName.isEmpty ? Naming.physical(name) : physicalName }
@@ -121,11 +296,27 @@ public enum RelationshipKind: String, Codable, CaseIterable {
     case nonIdentifying
     /// Many on both sides. No columns in either entity; SQL gets a junction table.
     case manyToMany
+    /// The child is a kind of the parent (an Employee is a Person): it has the parent's key as its own key, and
+    /// at most one child row goes with a parent row. Also called a category.
+    case subtype
+
+    /// The kinds that put the parent's key into the child's key.
+    public var sharesKey: Bool { self == .identifying || self == .subtype }
 }
 
 /// How many children one parent has.
 public enum Cardinality: String, Codable, CaseIterable {
     case zeroOrMore, oneOrMore, zeroOrOne, exactlyOne
+    /// A number of your own, or a range: `Relationship.childLower` to `childUpper`.
+    case counted
+}
+
+/// How a relationship's line runs.
+public enum LineShape: String, Codable, CaseIterable {
+    /// Across and down with square corners, found by the app.
+    case auto
+    case straight
+    case curved
 }
 
 public enum ReferentialAction: String, Codable, CaseIterable {
@@ -156,6 +347,34 @@ public struct Relationship: Codable, Identifiable, Equatable {
     public var childCardinality: Cardinality
     public var onDelete: ReferentialAction
     public var onUpdate: ReferentialAction
+    /// The verb phrase read the other way, from child to parent, such as "is placed by".
+    public var childName = ""
+    /// A name for the foreign key constraint. Empty: made from the tables.
+    public var physicalName = ""
+    public var definition = ""
+    /// The parent's unique index the foreign key copies, in place of its primary key.
+    public var parentIndex: UUID?
+    /// With `childCardinality == .counted`: at least and at most this many children. `childUpper` 0 means no limit.
+    public var childLower = 1
+    public var childUpper = 1
+    /// For a subtype: the parent's attribute that says which kind a row is.
+    public var discriminator: UUID?
+    /// For a subtype: every parent row is one of the kinds drawn (complete), or there may be others.
+    public var complete = true
+    public var shape = LineShape.auto
+    /// Points you put in the line yourself. Empty: the app finds the way.
+    public var waypoints: [Point] = []
+    /// Not drawn beside the line.
+    public var hideName = false
+    public var hideCardinality = false
+    public var style = Style()
+    public var tags: [Tag] = []
+
+    enum CodingKeys: String, CodingKey {
+        case id, parent, child, kind, name, parentOptional, childCardinality, onDelete, onUpdate
+        case childName, physicalName, definition, parentIndex, childLower, childUpper, discriminator, complete, shape, waypoints
+        case hideName, hideCardinality, style, tags
+    }
 
     public init(id: UUID = UUID(), parent: UUID, child: UUID, kind: RelationshipKind = .nonIdentifying, name: String = "",
                 parentOptional: Bool = false, childCardinality: Cardinality = .zeroOrMore,
@@ -182,6 +401,70 @@ public struct Relationship: Codable, Identifiable, Equatable {
         childCardinality = try c.decodeIfPresent(Cardinality.self, forKey: .childCardinality) ?? .zeroOrMore
         onDelete = try c.decodeIfPresent(ReferentialAction.self, forKey: .onDelete) ?? .noAction
         onUpdate = try c.decodeIfPresent(ReferentialAction.self, forKey: .onUpdate) ?? .noAction
+        childName = try c.decodeIfPresent(String.self, forKey: .childName) ?? ""
+        physicalName = try c.decodeIfPresent(String.self, forKey: .physicalName) ?? ""
+        definition = try c.decodeIfPresent(String.self, forKey: .definition) ?? ""
+        parentIndex = try c.decodeIfPresent(UUID.self, forKey: .parentIndex)
+        childLower = try c.decodeIfPresent(Int.self, forKey: .childLower) ?? 1
+        childUpper = try c.decodeIfPresent(Int.self, forKey: .childUpper) ?? 1
+        discriminator = try c.decodeIfPresent(UUID.self, forKey: .discriminator)
+        complete = try c.decodeIfPresent(Bool.self, forKey: .complete) ?? true
+        shape = try c.decodeIfPresent(LineShape.self, forKey: .shape) ?? .auto
+        waypoints = try c.decodeIfPresent([Point].self, forKey: .waypoints) ?? []
+        hideName = try c.decodeIfPresent(Bool.self, forKey: .hideName) ?? false
+        hideCardinality = try c.decodeIfPresent(Bool.self, forKey: .hideCardinality) ?? false
+        style = try c.decodeIfPresent(Style.self, forKey: .style) ?? Style()
+        tags = try c.decodeIfPresent([Tag].self, forKey: .tags) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(parent, forKey: .parent)
+        try c.encode(child, forKey: .child)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(name, forKey: .name)
+        try c.encode(parentOptional, forKey: .parentOptional)
+        try c.encode(childCardinality, forKey: .childCardinality)
+        try c.encode(onDelete, forKey: .onDelete)
+        try c.encode(onUpdate, forKey: .onUpdate)
+        var a = Added(encoder, c)
+        // A kind or a count an older app has no word for.
+        if kind == .subtype || childCardinality == .counted { a.use?.newer = true }
+        try a.put(childName, .childName, unless: "")
+        try a.put(physicalName, .physicalName, unless: "")
+        try a.put(definition, .definition, unless: "")
+        try a.put(parentIndex, .parentIndex, unless: nil)
+        if childCardinality == .counted {
+            try a.container.encode(childLower, forKey: .childLower)
+            try a.container.encode(childUpper, forKey: .childUpper)
+        }
+        try a.put(discriminator, .discriminator, unless: nil)
+        try a.put(complete, .complete, unless: true)
+        try a.put(shape, .shape, unless: .auto)
+        try a.put(waypoints, .waypoints, unless: [])
+        try a.put(hideName, .hideName, unless: false)
+        try a.put(hideCardinality, .hideCardinality, unless: false)
+        try a.put(style, .style, unless: Style())
+        try a.put(tags, .tags, unless: [])
+    }
+
+    /// How many children at least and at most; `nil` at most is any number.
+    public var childRange: (lower: Int, upper: Int?) {
+        switch childCardinality {
+        case .zeroOrMore: (0, nil)
+        case .oneOrMore: (1, nil)
+        case .zeroOrOne: (0, 1)
+        case .exactlyOne: (1, 1)
+        case .counted: (max(0, childLower), childUpper <= 0 ? nil : max(childUpper, childLower))
+        }
+    }
+
+    /// The count as it is written beside a line: `3`, `2..5`, `2..*`.
+    public var childCountText: String {
+        let r = childRange
+        guard let upper = r.upper else { return "\(r.lower)..*" }
+        return upper == r.lower ? "\(upper)" : "\(r.lower)..\(upper)"
     }
 }
 
@@ -191,12 +474,102 @@ public struct Domain: Codable, Identifiable, Equatable {
     public var name: String
     public var type: String
     public var definition: String
+    /// The name in the database. Empty: made from `name`.
+    public var physicalName = ""
+    /// The domain this one is a narrower kind of.
+    public var parent: UUID?
+    /// What an attribute of this domain starts with.
+    public var defaultValue = ""
+    public var notNull = false
+    public var alias1 = ""
+    public var alias2 = ""
+    public var tags: [Tag] = []
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, type, definition, physicalName, parent, defaultValue, notNull, alias1, alias2, tags
+    }
 
     public init(id: UUID = UUID(), name: String, type: String, definition: String = "") {
         self.id = id
         self.name = name
         self.type = type
         self.definition = definition
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        type = try c.decodeIfPresent(String.self, forKey: .type) ?? ""
+        definition = try c.decodeIfPresent(String.self, forKey: .definition) ?? ""
+        physicalName = try c.decodeIfPresent(String.self, forKey: .physicalName) ?? ""
+        parent = try c.decodeIfPresent(UUID.self, forKey: .parent)
+        defaultValue = try c.decodeIfPresent(String.self, forKey: .defaultValue) ?? ""
+        notNull = try c.decodeIfPresent(Bool.self, forKey: .notNull) ?? false
+        alias1 = try c.decodeIfPresent(String.self, forKey: .alias1) ?? ""
+        alias2 = try c.decodeIfPresent(String.self, forKey: .alias2) ?? ""
+        tags = try c.decodeIfPresent([Tag].self, forKey: .tags) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(type, forKey: .type)
+        try c.encode(definition, forKey: .definition)
+        var a = Added(encoder, c)
+        try a.put(physicalName, .physicalName, unless: "")
+        try a.put(parent, .parent, unless: nil)
+        try a.put(defaultValue, .defaultValue, unless: "")
+        try a.put(notNull, .notNull, unless: false)
+        try a.put(alias1, .alias1, unless: "")
+        try a.put(alias2, .alias2, unless: "")
+        try a.put(tags, .tags, unless: [])
+    }
+
+    public var columnTypeName: String { physicalName.isEmpty ? Naming.physical(name) : physicalName }
+}
+
+/// A kind of entity, with the colour its entities get: Resource, Event, Summary, or your own.
+public struct EntityType: Codable, Equatable, Hashable, Identifiable {
+    public var name: String
+    /// `#RRGGBB`.
+    public var color: String
+    public var id: String { name }
+
+    public init(name: String, color: String) {
+        self.name = name
+        self.color = color
+    }
+
+    /// The three every diagram starts with, in the colours Astah gives them.
+    public static let standard = [EntityType(name: "Resource", color: "#FF9999"), EntityType(name: "Event", color: "#FFFF99"),
+                                  EntityType(name: "Summary", color: "#66CCFF")]
+}
+
+/// A data type of your own, next to the ones every database has: its name and whether it takes a length.
+public struct DataType: Codable, Identifiable, Equatable, Hashable {
+    public enum Rule: String, Codable, CaseIterable { case none, optional, required }
+
+    public var id: UUID
+    public var name: String
+    /// Whether a length goes in brackets after it: never, if you like, or always.
+    public var length: Rule
+    /// The length it gets when one is needed and none was typed.
+    public var defaultLength: String
+    public var definition: String
+
+    public init(id: UUID = UUID(), name: String, length: Rule = .optional, defaultLength: String = "", definition: String = "") {
+        self.id = id
+        self.name = name
+        self.length = length
+        self.defaultLength = defaultLength
+        self.definition = definition
+    }
+
+    /// The type as an attribute gets it: with its default length when it must have one.
+    public var spelled: String {
+        length == .required && !defaultLength.isEmpty ? "\(name)(\(defaultLength))" : name
     }
 }
 
@@ -245,7 +618,9 @@ public enum Dialect: String, Codable, CaseIterable {
 
 /// One file: everything in a diagram.
 public struct Diagram: Codable, Equatable {
-    public static let currentVersion = 1
+    /// The newest file version this app writes. A file is written as version 1 for as long as it holds nothing
+    /// that came later, so the first release still opens it.
+    public static let currentVersion = 2
 
     public var version = Diagram.currentVersion
     public var entities: [Entity] = []
@@ -253,6 +628,16 @@ public struct Diagram: Codable, Equatable {
     public var domains: [Domain] = []
     public var display = DisplayOptions()
     public var dialect: Dialect = .postgres
+    /// The kinds an entity can be.
+    public var entityTypes: [EntityType] = EntityType.standard
+    /// Your own data types.
+    public var dataTypes: [DataType] = []
+    /// The type an attribute gets when you type none and its name doesn't say. Empty: `VARCHAR(255)`.
+    public var defaultType = ""
+
+    enum CodingKeys: String, CodingKey {
+        case version, entities, relationships, domains, display, dialect, entityTypes, dataTypes, defaultType
+    }
 
     public init() {}
 
@@ -264,6 +649,24 @@ public struct Diagram: Codable, Equatable {
         domains = try c.decodeIfPresent([Domain].self, forKey: .domains) ?? []
         display = try c.decodeIfPresent(DisplayOptions.self, forKey: .display) ?? DisplayOptions()
         dialect = try c.decodeIfPresent(Dialect.self, forKey: .dialect) ?? .postgres
+        entityTypes = try c.decodeIfPresent([EntityType].self, forKey: .entityTypes) ?? EntityType.standard
+        dataTypes = try c.decodeIfPresent([DataType].self, forKey: .dataTypes) ?? []
+        defaultType = try c.decodeIfPresent(String.self, forKey: .defaultType) ?? ""
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(entities, forKey: .entities)
+        try c.encode(relationships, forKey: .relationships)
+        try c.encode(domains, forKey: .domains)
+        try c.encode(display, forKey: .display)
+        try c.encode(dialect, forKey: .dialect)
+        var a = Added(encoder, c)
+        try a.put(entityTypes, .entityTypes, unless: EntityType.standard)
+        try a.put(dataTypes, .dataTypes, unless: [])
+        try a.put(defaultType, .defaultType, unless: "")
+        // Last, when everything inside has said whether it needs the newer version.
+        try a.container.encode(a.use?.newer == false ? 1 : Diagram.currentVersion, forKey: .version)
     }
 
     // MARK: File format: readable JSON with stable key order, so a diagram diffs well in git.
@@ -271,12 +674,15 @@ public struct Diagram: Codable, Equatable {
     public func encoded() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        encoder.userInfo[FormatUse.key] = FormatUse()
         return try encoder.encode(self)
     }
 
     public static func decode(_ data: Data) throws -> Diagram {
         var d = try JSONDecoder().decode(Diagram.self, from: data)
         if d.version > currentVersion { throw DiagramError.newerVersion(d.version) }
+        // Which version the file was is only for that check; from here on it is this app's diagram.
+        d.version = currentVersion
         d.normalize()
         return d
     }
@@ -293,7 +699,10 @@ public struct Diagram: Codable, Equatable {
 
     /// The SQL type behind an attribute: a domain name becomes the domain's type.
     public func resolvedType(_ type: String) -> String {
-        domain(named: type)?.type ?? type
+        guard let d = domain(named: type) else { return type }
+        // A domain without a type of its own has its parent's.
+        if d.type.trimmingCharacters(in: .whitespaces).isEmpty { return ancestors(of: d).first { !$0.type.trimmingCharacters(in: .whitespaces).isEmpty }?.type ?? "" }
+        return d.type
     }
 
     public func relationships(of entity: UUID) -> [Relationship] {

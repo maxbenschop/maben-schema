@@ -625,7 +625,12 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
             menu.add("Identifying", checked: r.kind == .identifying, enabled: !own, set("Change Relationship") { $0.kind = .identifying })
             menu.add("Non-identifying", checked: r.kind == .nonIdentifying, set("Change Relationship") { $0.kind = .nonIdentifying })
             menu.add("Many-to-many", checked: r.kind == .manyToMany, set("Change Relationship") { $0.kind = .manyToMany })
-            if r.kind != .manyToMany {
+            menu.add("Subtype (Is a Kind Of)", checked: r.kind == .subtype, enabled: !own, set("Change Relationship") { $0.kind = .subtype })
+            if r.kind == .subtype {
+                menu.addItem(.separator())
+                menu.add("Every Parent Is One of Its Kinds", checked: r.complete, set("Change Subtype") { $0.complete.toggle() })
+                if !own { menu.add("Swap Parent and Child", symbol: "arrow.left.arrow.right") { store.edit("Swap Direction") { $0.flip(relationship: r.id) } } }
+            } else if r.kind != .manyToMany {
                 menu.addItem(.separator())
                 menu.add("Zero or More", checked: r.childCardinality == .zeroOrMore, set("Change Cardinality") { $0.childCardinality = .zeroOrMore })
                 menu.add("One or More", checked: r.childCardinality == .oneOrMore, set("Change Cardinality") { $0.childCardinality = .oneOrMore })

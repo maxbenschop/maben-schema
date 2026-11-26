@@ -131,8 +131,8 @@ enum SQLScan {
             var at = afterFirst
             for _ in 0..<6 {
                 let (w, next) = word(p, n, at)
-                if w == "TABLE" || w == "DATABASE" || w == "SCHEMA" { return .structure }
-                guard ["TEMP", "TEMPORARY", "GLOBAL", "LOCAL", "UNLOGGED", "OR", "REPLACE", "FOREIGN"].contains(w) else { return .other }
+                if w == "TABLE" || w == "DATABASE" || w == "SCHEMA" || w == "INDEX" { return .structure }
+                guard ["TEMP", "TEMPORARY", "GLOBAL", "LOCAL", "UNLOGGED", "OR", "REPLACE", "FOREIGN", "UNIQUE", "CLUSTERED", "NONCLUSTERED"].contains(w) else { return .other }
                 at = next
             }
             return .other

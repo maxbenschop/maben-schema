@@ -12,8 +12,10 @@ extension Diagram {
         // An entity can't be part of its own key: a relationship to itself, or one that closes a circle of
         // identifying relationships, is made non-identifying.
         var identifying: [UUID: Set<UUID>] = [:]
+        var byID: [UUID: Int] = [:]
+        for (i, e) in entities.enumerated() { byID[e.id] = i }
         for i in relationships.indices {
-            if relationships[i].kind == .identifying {
+            if relationships[i].kind.sharesKey {
                 let r = relationships[i]
                 if r.parent == r.child || Self.reaches(from: r.child, to: r.parent, in: identifying) {
                     relationships[i].kind = .nonIdentifying
@@ -23,6 +25,27 @@ extension Diagram {
             }
             // Only a non-identifying foreign key can be empty.
             if relationships[i].kind != .nonIdentifying { relationships[i].parentOptional = false }
+            // A subtype row goes with one parent row, and the parent's own key is what it shares.
+            if relationships[i].kind == .subtype {
+                relationships[i].childCardinality = .zeroOrOne
+                relationships[i].parentIndex = nil
+            } else {
+                relationships[i].discriminator = nil
+            }
+            // The foreign key can copy a unique index of the parent in place of its key, while that index is there.
+            if let index = relationships[i].parentIndex, let p = byID[relationships[i].parent] {
+                let found = entities[p].indexes.first { $0.id == index }
+                if relationships[i].kind == .manyToMany || found == nil || found?.unique != true || found?.attributes.isEmpty != false {
+                    relationships[i].parentIndex = nil
+                }
+            }
+            if let d = relationships[i].discriminator, let p = byID[relationships[i].parent], !entities[p].attributes.contains(where: { $0.id == d }) {
+                relationships[i].discriminator = nil
+            }
+            if relationships[i].childCardinality == .counted {
+                relationships[i].childLower = max(0, relationships[i].childLower)
+                if relationships[i].childUpper != 0 { relationships[i].childUpper = max(relationships[i].childUpper, relationships[i].childLower, 1) }
+            }
         }
 
         // Columns whose relationship is gone (or became many-to-many) go too.
@@ -46,6 +69,14 @@ extension Diagram {
         }
 
         for e in entities.indices {
+            // An index only names attributes its entity still has.
+            if !entities[e].indexes.isEmpty {
+                let own = Set(entities[e].attributes.map(\.id))
+                for i in entities[e].indexes.indices where !entities[e].indexes[i].attributes.allSatisfy(own.contains) {
+                    entities[e].indexes[i].attributes.removeAll { !own.contains($0) }
+                }
+            }
+            if !entities[e].kind.isEmpty, !entityTypes.contains(where: { $0.name == entities[e].kind }) { entities[e].kind = "" }
             for a in entities[e].attributes.indices where entities[e].attributes[a].isPrimaryKey {
                 entities[e].attributes[a].notNull = true
             }
@@ -71,7 +102,7 @@ extension Diagram {
     private mutating func syncForeignKeys(_ r: Relationship, _ index: [UUID: Int]) -> Bool {
         guard let pi = index[r.parent], let ci = index[r.child] else { return false }
         let parent = entities[pi]
-        let keys = parent.attributes.filter(\.isPrimaryKey)
+        let keys = Self.keyAttributes(of: r, in: parent)
         let keyIDs = Set(keys.map(\.id))
         var child = entities[ci]
         let before = child.attributes
@@ -89,15 +120,15 @@ extension Diagram {
                     a.name = Self.foreignKeyName(for: key, of: parent, in: child, excluding: a.id)
                     a.physicalName = a.name == key.name ? key.physicalName : ""
                 }
-                a.isPrimaryKey = r.kind == .identifying
-                a.notNull = r.kind == .identifying || !r.parentOptional
+                a.isPrimaryKey = r.kind.sharesKey
+                a.notNull = r.kind.sharesKey || !r.parentOptional
                 a.autoIncrement = false
                 child.attributes[i] = a
             } else {
                 var a = Attribute(name: Self.foreignKeyName(for: key, of: parent, in: child, excluding: nil), type: type)
                 a.physicalName = a.name == key.name ? key.physicalName : ""
-                a.isPrimaryKey = r.kind == .identifying
-                a.notNull = r.kind == .identifying || !r.parentOptional
+                a.isPrimaryKey = r.kind.sharesKey
+                a.notNull = r.kind.sharesKey || !r.parentOptional
                 a.foreignKey = ForeignKeyLink(relationship: r.id, parentAttribute: key.id)
                 child.attributes.append(a)
             }
@@ -105,6 +136,21 @@ extension Diagram {
         guard child.attributes != before else { return false }
         entities[ci] = child
         return true
+    }
+
+    /// The parent's attributes a relationship's foreign key copies: its primary key, or the unique index the
+    /// relationship names, in the index's order.
+    static func keyAttributes(of r: Relationship, in parent: Entity) -> [Attribute] {
+        if let id = r.parentIndex, let index = parent.indexes.first(where: { $0.id == id }), index.unique {
+            let found = index.attributes.compactMap { a in parent.attributes.first { $0.id == a } }
+            if !found.isEmpty { return found }
+        }
+        return parent.attributes.filter(\.isPrimaryKey)
+    }
+
+    /// The same, looked up from the relationship.
+    public func keyAttributes(of r: Relationship) -> [Attribute] {
+        entity(r.parent).map { Self.keyAttributes(of: r, in: $0) } ?? []
     }
 
     /// A counter type in the parent is a plain number in the child.
@@ -181,12 +227,48 @@ extension Diagram {
 
     /// An entity whose key contains a parent's key: it can't exist on its own. Drawn with round corners.
     public func isDependent(_ entity: UUID) -> Bool {
-        relationships.contains { $0.child == entity && $0.kind == .identifying }
+        relationships.contains { $0.child == entity && $0.kind.sharesKey }
     }
 
     /// Every dependent entity, in one pass.
     public var dependentEntities: Set<UUID> {
-        Set(relationships.filter { $0.kind == .identifying }.map(\.child))
+        Set(relationships.filter { $0.kind.sharesKey }.map(\.child))
+    }
+
+    /// The colour an entity's kind gives it, as `#RRGGBB`; nil when it has no kind.
+    public func typeColor(of entity: Entity) -> String? {
+        entity.kind.isEmpty ? nil : entityTypes.first { $0.name == entity.kind }?.color
+    }
+
+    /// The marks an attribute gets for the indexes it is in, as Astah writes them: `AK1`, `IE2`.
+    public func indexMarks(of attribute: UUID, in entity: Entity) -> [String] {
+        var unique = 0, plain = 0
+        var out: [String] = []
+        for index in entity.indexes where index.shown {
+            if index.unique { unique += 1 } else { plain += 1 }
+            if index.attributes.contains(attribute) { out.append(index.unique ? "AK\(unique)" : "IE\(plain)") }
+        }
+        return out
+    }
+
+    /// A name for a new index that the entity doesn't use yet.
+    public func freeIndexName(in entity: Entity, unique: Bool) -> String {
+        let taken = Set(entity.indexes.map { $0.name.lowercased() })
+        let base = (unique ? "ak_" : "ix_") + entity.tableName.replacingOccurrences(of: ".", with: "_")
+        var n = 1
+        while taken.contains("\(base)_\(n)") { n += 1 }
+        return "\(base)_\(n)"
+    }
+
+    /// The domains above a domain, the nearest first.
+    public func ancestors(of domain: Domain) -> [Domain] {
+        var out: [Domain] = []
+        var next = domain.parent
+        while let id = next, let d = self.domain(id), !out.contains(where: { $0.id == d.id }), d.id != domain.id {
+            out.append(d)
+            next = d.parent
+        }
+        return out
     }
 }
 
@@ -225,6 +307,15 @@ extension Diagram {
                 out.append(Problem(id: "dupecol-\(e.id)-\(name)", severity: .error,
                                    message: name.isEmpty ? "\(label) has attributes without a name." : "\(label) has \(count) attributes called \(name).", entity: e.id))
             }
+            var indexNames: Set<String> = []
+            for index in e.indexes {
+                if index.attributes.isEmpty {
+                    out.append(Problem(id: "emptyindex-\(index.id)", severity: .warning, message: "\(label): the index \(index.name) has no attributes.", entity: e.id))
+                }
+                if !indexNames.insert(index.name.lowercased()).inserted {
+                    out.append(Problem(id: "dupeindex-\(index.id)", severity: .error, message: "\(label) has more than one index called \(index.name).", entity: e.id))
+                }
+            }
             let untyped = e.attributes.filter { $0.type.trimmingCharacters(in: .whitespaces).isEmpty }
             if !untyped.isEmpty {
                 let names = untyped.map(\.name).joined(separator: ", ")
@@ -237,7 +328,7 @@ extension Diagram {
         for r in relationships {
             guard let pi = byID[r.parent], let ci = byID[r.child] else { continue }
             let p = entities[pi], c = entities[ci]
-            if p.primaryKey.isEmpty {
+            if p.primaryKey.isEmpty, r.parentIndex == nil {
                 out.append(Problem(id: "relnokey-\(r.id)", severity: .error,
                                    message: "\(c.name) can't point at \(p.name): \(p.name) has no primary key.", entity: nil, relationship: r.id))
             } else if r.kind == .manyToMany, c.primaryKey.isEmpty {

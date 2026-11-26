@@ -11,11 +11,18 @@ public enum Report {
         }
         for e in d.entities {
             out += "\n## \(e.name)\n\n"
-            out += "Table `\(e.tableName)`.\(e.definition.isEmpty ? "" : " " + e.definition.replacingOccurrences(of: "\n", with: " "))\n\n"
+            out += "Table `\(e.tableName)`.\(e.kind.isEmpty ? "" : " Kind: \(e.kind).")\(e.definition.isEmpty ? "" : " " + e.definition.replacingOccurrences(of: "\n", with: " "))\n\n"
             out += "| Attribute | Column | Type | Key | Required | Default | Refers to | Definition |\n|---|---|---|---|---|---|---|---|\n"
             for a in e.attributes {
                 out += "| " + [a.name, "`\(a.columnName)`", typeText(a, d), keyText(a), a.notNull ? "yes" : "", a.defaultValue,
                                referenceText(a, d), a.definition].map(cell).joined(separator: " | ") + " |\n"
+            }
+            if !e.indexes.isEmpty {
+                out += "\n| Index | Unique | Attributes |\n|---|---|---|\n"
+                for index in e.indexes {
+                    let names = index.attributes.compactMap { id in e.attributes.first { $0.id == id }?.name }
+                    out += "| \(cell(index.name)) | \(index.unique ? "yes" : "") | \(cell(names.joined(separator: ", "))) |\n"
+                }
             }
         }
         if !d.relationships.isEmpty {
@@ -44,6 +51,9 @@ public enum Report {
         if r.kind == .manyToMany {
             return "\(parent.name) and \(child.name): many on both sides."
         }
+        if r.kind == .subtype {
+            return "Each \(child.name) is a \(parent.name). \(r.complete ? "Every \(parent.name) is one of its kinds." : "A \(parent.name) can also be none of its kinds.")"
+        }
         let verb = r.name.isEmpty ? "has" : r.name
         let many: String
         switch r.childCardinality {
@@ -51,8 +61,12 @@ public enum Report {
         case .oneOrMore: many = "one or more"
         case .zeroOrOne: many = "zero or one"
         case .exactlyOne: many = "exactly one"
+        case .counted:
+            let range = r.childRange
+            many = range.upper == nil ? "\(range.lower) or more" : range.upper == range.lower ? "exactly \(range.lower)" : "\(range.lower) to \(range.upper!)"
         }
-        return "One \(parent.name) \(verb) \(many) \(child.name); each \(child.name) \(r.parentOptional ? "may have" : "has") one \(parent.name)."
+        let back = r.childName.isEmpty ? (r.parentOptional ? "may have" : "has") : r.childName
+        return "One \(parent.name) \(verb) \(many) \(child.name); each \(child.name) \(back) \(r.parentOptional && !r.childName.isEmpty ? "at most " : "")one \(parent.name)."
     }
 
     static func typeText(_ a: Attribute, _ d: Diagram) -> String {
@@ -74,6 +88,7 @@ public enum Report {
         case .identifying: "identifying"
         case .nonIdentifying: "non-identifying"
         case .manyToMany: "many-to-many"
+        case .subtype: "subtype"
         }
     }
 

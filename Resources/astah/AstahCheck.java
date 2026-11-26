@@ -31,14 +31,14 @@ public class AstahCheck {
         if (er == null) { System.out.println("FAILED: no ER model in the file"); System.exit(1); }
         IERSchema schema = er.getSchemata()[0];
         List<String> relationships = new ArrayList<>();
-        Map<String, Integer> order = new HashMap<>();
+        List<String> subtypes = new ArrayList<>();
         for (IEREntity e : schema.getEntities()) {
-            out.println("ENTITY " + e.getLogicalName() + "|" + e.getPhysicalName() + "|" + s(e.getDefinition()));
+            out.println("ENTITY " + e.getLogicalName() + "|" + e.getPhysicalName() + "|" + s(e.getDefinition()) + "|" + s(e.getType()) + "|" + s(e.getAlias1()) + "|" + s(e.getAlias2()));
             List<IERAttribute> all = new ArrayList<>(Arrays.asList(e.getPrimaryKeys()));
             all.addAll(Arrays.asList(e.getNonPrimaryKeys()));
             for (IERAttribute at : all) {
                 IERAttribute key = at.getReferencedPrimaryKey();
-                String source = key == null || at.getReferencedRelationship() == null ? "" : ((INamedElement) key.getOwner()).getName() + "." + key.getName();
+                String source = key == null ? "" : ((INamedElement) key.getOwner()).getName() + "." + key.getName();
                 out.println("ATTR " + e.getLogicalName() + "." + at.getLogicalName() + "|" + at.getPhysicalName() + "|pk=" + yes(at.isPrimaryKey()) + "|fk=" + yes(at.isForeignKey())
                     + "|nn=" + yes(at.isNotNull()) + "|" + (at.getDatatype() == null ? "" : at.getDatatype().getName()) + "|" + s(at.getLengthPrecision()) + "|" + s(at.getDefaultValue())
                     + "|" + (at.getDomain() == null ? "" : at.getDomain().getName()) + "|" + source + "|" + s(at.getDefinition()));
@@ -46,21 +46,40 @@ public class AstahCheck {
             for (IERIndex ix : e.getERIndices()) {
                 StringBuilder names = new StringBuilder();
                 for (IERAttribute x : ix.getERAttributes()) names.append(names.length() > 0 ? "," : "").append(x.getName());
-                out.println("INDEX " + e.getLogicalName() + "|" + (ix.isUnique() ? "unique" : "not unique") + "|" + names);
+                out.println("INDEX " + e.getLogicalName() + "|" + ix.getName() + "|" + (ix.isUnique() ? "unique" : "not unique") + "|" + names);
             }
             for (IERRelationship r : e.getChildrenRelationships()) {
                 List<String> keys = new ArrayList<>();
                 for (IERAttribute x : r.getForeignKeys()) keys.add(x.getName());
                 Collections.sort(keys);
                 String kind = r.isMultiToMulti() ? "many-to-many" : r.isIdentifying() ? "identifying" : "non-identifying";
-                relationships.add(r.getId() + "\t" + "REL " + r.getParent().getName() + ">" + r.getChild().getName() + "|" + r.getLogicalName() + "|" + kind + "|" + r.getCardinality()
-                    + "|parentRequired=" + yes(r.isParentRequired()) + "|" + String.join(",", keys));
+                relationships.add(r.getId() + "\t" + "REL " + r.getParent().getName() + ">" + r.getChild().getName() + "|" + r.getLogicalName() + "|" + s(r.getVerbPhraseChild()) + "|" + kind + "|" + r.getCardinality()
+                    + "|parentRequired=" + yes(r.isParentRequired()) + "|" + String.join(",", keys) + "|" + (r.getERIndex() == null ? "" : r.getERIndex().getName()) + "|" + s(r.getDefinition()));
+            }
+            for (IERSubtypeRelationship r : e.getChildrenSubtypeRelationships()) {
+                subtypes.add(r.getId() + "\t" + "SUBTYPE " + r.getParent().getName() + ">" + r.getChild().getName() + "|" + r.getLogicalName() + "|complete=" + yes(r.isConclusive())
+                    + "|" + (r.getDiscriminatorAttribute() == null ? "" : r.getDiscriminatorAttribute().getName()));
             }
         }
         // In the order they were made: the ids count up.
-        relationships.sort(Comparator.comparingLong(l -> Long.parseLong(l.substring(0, l.indexOf('-')), 36)));
+        Comparator<String> byId = Comparator.comparingLong(l -> Long.parseLong(l.substring(0, l.indexOf('-')), 36));
+        relationships.sort(byId);
+        subtypes.sort(byId);
         for (String l : relationships) out.println(l.substring(l.indexOf('\t') + 1));
-        for (IERDomain d : schema.getDomains()) out.println("DOMAIN " + d.getLogicalName() + "|" + s(d.getDatatypeName()) + "|" + s(d.getLengthPrecision()) + "|" + s(d.getDefinition()));
+        for (String l : subtypes) out.println(l.substring(l.indexOf('\t') + 1));
+        Map<String, String> parents = new HashMap<>();
+        List<IERDomain> domains = new ArrayList<>();
+        Deque<IERDomain> open = new ArrayDeque<>(Arrays.asList(schema.getDomains()));
+        while (!open.isEmpty()) {
+            IERDomain d = open.poll();
+            domains.add(d);
+            for (IERDomain c : d.getChildren()) { parents.put(c.getId(), d.getLogicalName()); open.add(c); }
+        }
+        domains.sort(Comparator.comparingLong(d -> Long.parseLong(d.getId().substring(0, d.getId().indexOf('-')), 36)));
+        for (IERDomain d : domains) {
+            out.println("DOMAIN " + d.getLogicalName() + "|" + s(d.getPhysicalName()) + "|" + s(d.getDatatypeName()) + "|" + s(d.getLengthPrecision()) + "|nn=" + yes(d.isNotNull())
+                + "|" + s(d.getDefaultValue()) + "|" + s(parents.get(d.getId())) + "|" + s(d.getDefinition()));
+        }
         for (INamedElement d : pa.findElements(IERDiagram.class)) {
             IERDiagram dg = (IERDiagram) d;
             int boxes = 0, lines = 0;
