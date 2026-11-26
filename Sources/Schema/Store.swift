@@ -108,8 +108,14 @@ final class DiagramStore: ObservableObject {
     /// The other diagram File › Compare With… was pointed at, and its name.
     @Published var compared: (name: String, diagram: Diagram)?
 
+    /// What is selected in the activity diagram being shown: nodes, arrows and swimlanes, by their ids.
+    @Published var activityParts: Set<UUID> = []
+    /// The kind of node the next click on an activity diagram puts down. Nil: the pointer.
+    @Published var activityTool: ActivityNode.Kind?
+
     weak var undoManager: UndoManager?
     weak var canvas: CanvasView?
+    weak var activityCanvas: ActivityCanvasView?
     weak var window: NSWindow?
 
     /// Goes up with every change; what's drawn and the SQL are remembered per revision.
@@ -129,6 +135,8 @@ final class DiagramStore: ObservableObject {
         diagram = d
         revision += 1
         selection = .none
+        activityParts = []
+        activityTool = nil
         lastKey = nil
         undoManager?.removeAllActions(withTarget: self)
         canvas?.diagramReplaced()
@@ -198,6 +206,11 @@ final class DiagramStore: ObservableObject {
     }
 
     private func pruneSelection() {
+        if !activityParts.isEmpty {
+            let shown = diagram.shownActivity
+            let alive = activityParts.filter { id in shown.map { $0.node(id) != nil || $0.flow(id) != nil || $0.lane(id) != nil } ?? false }
+            if alive != activityParts { activityParts = alive }
+        }
         if !selectedAnnotations.isEmpty {
             let alive = selectedAnnotations.filter { diagram.annotation($0) != nil }
             if alive != selectedAnnotations { selectedAnnotations = alive }
@@ -228,6 +241,20 @@ final class DiagramStore: ObservableObject {
         return s
     }
 
+    private var activitySceneCache: (revision: Int, scene: ActivityScene)?
+
+    /// The activity diagram being shown, measured. Nil while an ER diagram is shown.
+    var activityScene: ActivityScene? {
+        guard let shown = diagram.shownActivity else { return nil }
+        if let c = activitySceneCache, c.revision == revision, c.scene.activity.id == shown.id { return c.scene }
+        let s = ActivityScene(shown)
+        activitySceneCache = (revision, s)
+        return s
+    }
+
+    /// What is being shown, as something to draw: for a picture, a print, a copy.
+    var drawing: any Drawing { activityScene ?? Scene(diagram) }
+
     /// The SQL shows (and saves) only the selected entities.
     @Published var sqlSelectedOnly = false
 
@@ -254,6 +281,7 @@ final class DiagramStore: ObservableObject {
     /// A new entity. Without a position it goes in the middle of what you're looking at, clear of the others.
     @discardableResult
     func newEntity(at point: CGPoint? = nil, name: String = "Entity", rename: Bool = true) -> UUID {
+        showModel()
         var p = point ?? canvas?.visibleCentre ?? CGPoint(x: 200, y: 160)
         if point == nil {
             p.x -= 90; p.y -= 60
@@ -603,6 +631,7 @@ final class DiagramStore: ObservableObject {
 
     /// Adds what an import found: laid out, beside what's already there (or instead of it).
     func importResult(_ found: SQLImport.Result, replace: Bool, at point: CGPoint? = nil) {
+        showModel()
         var result = found
         guard result.tables > 0 else { return }
         let sizes = Scene(result.diagram).sizes
@@ -757,15 +786,27 @@ final class DiagramStore: ObservableObject {
 
     // MARK: Several diagrams of one model
 
-    private func afterSwitch() {
+    /// Entities and notes belong on an ER diagram: when an activity diagram is showing, the ER diagram shows first,
+    /// so what is added is there to see.
+    func showModel() {
+        if diagram.activity != nil { showSheet(diagram.sheetID) }
+    }
+
+    func afterSwitch() {
         selection = .none
         selectedAnnotations = []
+        activityParts = []
+        activityTool = nil
         canvas?.diagramReplaced()
+        activityCanvas?.diagramReplaced()
     }
 
     func showSheet(_ id: UUID) {
-        guard id != diagram.sheetID else { return }
-        edit("Show Another Diagram") { $0.activate(id) }
+        guard id != diagram.sheetID || diagram.activity != nil else { return }
+        edit("Show Another Diagram") { d in
+            d.activity = nil
+            d.activate(id)
+        }
         afterSwitch()
     }
 
@@ -781,6 +822,8 @@ final class DiagramStore: ObservableObject {
     func newSheet(_ what: NewSheet) {
         let chosen = selection.entityIDs
         edit("New Diagram") { d in
+            // A new ER diagram is the one to look at, also when an activity diagram was showing.
+            d.activity = nil
             switch what {
             case .empty: d.addSheet(with: [])
             case .everything: d.addSheet()
@@ -843,6 +886,7 @@ final class DiagramStore: ObservableObject {
     /// Puts a note, text, shape or drawing on the canvas and selects it.
     @discardableResult
     func add(_ annotation: Annotation, name: String = "Add") -> UUID {
+        showModel()
         edit(name) { $0.annotations.append(annotation) }
         selection = .none
         selectedAnnotations = [annotation.id]

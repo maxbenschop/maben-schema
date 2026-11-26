@@ -94,6 +94,34 @@ enum Grid {
     }
 
     static let didChange = Notification.Name("gg.maben.schema.gridChanged")
+
+    /// The dots behind a diagram: every other grid step (every 20 points as it comes), five times as far apart
+    /// when zoomed far out. `offset`: where canvas point (0, 0) is in the view.
+    static func drawDots(in bounds: CGRect, offset: CGPoint, zoom: CGFloat) {
+        guard show else { return }
+        let step = CGFloat(size) * 2
+        var spacing = step * zoom
+        if spacing < 9 { spacing = step * 5 * zoom }
+        guard spacing >= 9 else { return }
+        NSGraphicsContext.current?.cgContext.setFillColor(MB.nsWash(zoom < 0.6 ? 0.1 : 0.13).cgColor)
+        let dot: CGFloat = 1.5
+        var x = offset.x.truncatingRemainder(dividingBy: spacing)
+        if x < 0 { x += spacing }
+        let firstY: CGFloat = {
+            let y = offset.y.truncatingRemainder(dividingBy: spacing)
+            return y < 0 ? y + spacing : y
+        }()
+        var rects: [CGRect] = []
+        while x < bounds.width {
+            var y = firstY
+            while y < bounds.height {
+                rects.append(CGRect(x: x - dot / 2, y: y - dot / 2, width: dot, height: dot))
+                y += spacing
+            }
+            x += spacing
+        }
+        NSGraphicsContext.current?.cgContext.fill(rects)
+    }
     private static func changed() { NotificationCenter.default.post(name: didChange, object: nil) }
 }
 

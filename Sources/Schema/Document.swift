@@ -35,7 +35,7 @@ final class SchemaDocument: NSDocument {
 
     /// File › Print: the diagram on paper. The two choices under the print panel are remembered.
     override func printOperation(withSettings printSettings: [NSPrintInfo.AttributeKey: Any]) throws -> NSPrintOperation {
-        let (scene, title) = MainActor.assumeIsolated { (Scene(store.diagram), store.title) }
+        let (scene, title) = MainActor.assumeIsolated { (store.drawing, store.title) }
         let defaults = UserDefaults.standard
         let view = Picture.PrintView(scene: scene, title: title, fit: defaults.object(forKey: "print.fit") as? Bool ?? true, marks: defaults.object(forKey: "print.marks") as? Bool ?? true)
         let info = printInfo.copy() as! NSPrintInfo
@@ -154,13 +154,26 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         store.canvas?.beginEdit(.newAttribute(entity: e))
     }
     @objc func renameSelection(_ sender: Any?) {
+        if store.diagram.activity != nil { store.activityCanvas?.renameSelection(); return }
         if let e = store.selection.singleEntity { store.canvas?.beginEdit(.entityName(e)) }
         else if let r = store.selection.relationship { store.canvas?.beginEdit(.relationshipName(r)) }
     }
     @objc func newDomain(_ sender: Any?) { store.newDomain() }
-    @objc func duplicateSelection(_ sender: Any?) { store.duplicateSelection() }
+    @objc func duplicateSelection(_ sender: Any?) { if store.diagram.activity != nil { store.duplicateActivityParts() } else { store.duplicateSelection() } }
     @objc func tidyUp(_ sender: Any?) { store.tidyUp() }
+    @objc func newActivity(_ sender: Any?) { store.newActivity() }
+    @objc func addActivityNode(_ sender: Any?) {
+        guard let raw = (sender as? NSMenuItem)?.representedObject as? String, let kind = ActivityNode.Kind(rawValue: raw) else { return }
+        store.addNode(kind)
+    }
+    @objc func addSwimlane(_ sender: Any?) { store.addLane() }
+
     @objc func alignSelection(_ sender: Any?) {
+        if store.diagram.activity != nil, let tag = (sender as? NSMenuItem)?.tag {
+            let all: [Alignment] = [.left, .centre, .right, .top, .middle, .bottom, .spreadAcross, .spreadDown]
+            if all.indices.contains(tag) { store.alignNodes(all[tag]) }
+            return
+        }
         let all: [Alignment] = [.left, .centre, .right, .top, .middle, .bottom, .spreadAcross, .spreadDown]
         guard let tag = (sender as? NSMenuItem)?.tag, all.indices.contains(tag) else { return }
         store.align(all[tag])
@@ -205,10 +218,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         guard let tag = (sender as? NSMenuItem)?.tag, kinds.indices.contains(tag) else { return }
         store.newSheet(kinds[tag])
     }
-    @objc func renameSheet(_ sender: Any?) { store.renameSheet(store.diagram.sheetID) }
-    @objc func deleteSheet(_ sender: Any?) { store.removeSheet(store.diagram.sheetID) }
-    @objc func nextSheet(_ sender: Any?) { store.stepSheet(1) }
-    @objc func previousSheet(_ sender: Any?) { store.stepSheet(-1) }
+    @objc func renameSheet(_ sender: Any?) { store.renameTab(store.diagram.shownTab) }
+    @objc func deleteSheet(_ sender: Any?) { store.removeTab(store.diagram.shownTab) }
+    @objc func nextSheet(_ sender: Any?) { store.stepTab(1) }
+    @objc func previousSheet(_ sender: Any?) { store.stepTab(-1) }
     @objc func takeOffDiagram(_ sender: Any?) { store.takeOffDiagram() }
 
     // MARK: View menu
@@ -217,13 +230,39 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     @objc func toggleInspector(_ sender: Any?) { store.showInspector.toggle() }
     @objc func toggleSQL(_ sender: Any?) { store.showSQL.toggle() }
     @objc func showPalette(_ sender: Any?) { store.palette.toggle() }
-    @objc func zoomIn(_ sender: Any?) { store.canvas?.zoomIn() }
-    @objc func zoomOut(_ sender: Any?) { store.canvas?.zoomOut() }
-    @objc func zoomActual(_ sender: Any?) { store.canvas?.zoomActual() }
-    @objc func zoomToFit(_ sender: Any?) { store.canvas?.zoomToFit() }
+    @objc func zoomIn(_ sender: Any?) { store.zoomIn() }
+    @objc func zoomOut(_ sender: Any?) { store.zoomOut() }
+    @objc func zoomActual(_ sender: Any?) { store.zoomActual() }
+    @objc func zoomToFit(_ sender: Any?) { store.zoomToFit() }
+
+    /// What the menus offer while an activity diagram is shown. Nil: as for an ER diagram.
+    private func validateForActivity(_ item: NSMenuItem, _ shown: Activity) -> Bool? {
+        let nodes = store.activityParts.filter { shown.node($0) != nil }.count
+        switch item.action {
+        case #selector(newEntity(_:)), #selector(addAttribute(_:)), #selector(tidyUp(_:)), #selector(sameWidth(_:)), #selector(bringToFront(_:)), #selector(sendToBack(_:)),
+             #selector(takeOffDiagram(_:)), #selector(copyStyle(_:)), #selector(pasteStyle(_:)), #selector(toggleLineJumps(_:)), #selector(rerouteAll(_:)),
+             #selector(addAnnotation(_:)), #selector(addPicture(_:)), #selector(toggleMap(_:)), #selector(toggleSQL(_:)), #selector(showReplace(_:)):
+            return false
+        case #selector(setNotation(_:)), #selector(setNames(_:)), #selector(setDetail(_:)):
+            item.state = .off
+            return false
+        case #selector(newSheet(_:)): return item.tag < 2
+        case #selector(renameSelection(_:)): return store.activityParts.count == 1
+        case #selector(duplicateSelection(_:)): return nodes > 0
+        case #selector(alignSelection(_:)): return nodes > 1
+        case #selector(deleteSheet(_:)), #selector(nextSheet(_:)), #selector(previousSheet(_:)): return true
+        case #selector(exportImage(_:)), #selector(copyImage(_:)): return !shown.nodes.isEmpty || !shown.lanes.isEmpty
+        default: return nil
+        }
+    }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         let d = store.diagram
+        if let shown = d.shownActivity {
+            if let answer = validateForActivity(item, shown) { return answer }
+        } else if item.action == #selector(addActivityNode(_:)) || item.action == #selector(addSwimlane(_:)) {
+            return false
+        }
         switch item.action {
         case #selector(addAttribute(_:)): return store.selection.singleEntity != nil
         case #selector(renameSelection(_:)): return store.selection.singleEntity != nil || store.selection.relationship != nil
@@ -231,7 +270,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         case #selector(alignSelection(_:)), #selector(sameWidth(_:)): return store.selection.entityIDs.count > 1
         case #selector(bringToFront(_:)), #selector(sendToBack(_:)): return store.canArrange
         case #selector(newSheet(_:)): return item.tag != 2 || !store.selection.entityIDs.isEmpty
-        case #selector(deleteSheet(_:)), #selector(nextSheet(_:)), #selector(previousSheet(_:)): return d.hasSeveralSheets
+        case #selector(deleteSheet(_:)): return d.hasSeveralSheets
+        case #selector(nextSheet(_:)), #selector(previousSheet(_:)): return d.tabs.count > 1
         case #selector(takeOffDiagram(_:)): return !store.selection.entityIDs.isEmpty
         case #selector(copyStyle(_:)): return store.canCopyStyle
         case #selector(pasteStyle(_:)): return store.canPasteStyle
@@ -241,9 +281,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
         case #selector(toggleGrid(_:)): item.title = Grid.show ? "Hide Grid" : "Show Grid"
         case #selector(toggleSnap(_:)): item.state = Grid.snaps ? .on : .off
         case #selector(showReplace(_:)): return !d.entities.isEmpty
-        case #selector(tidyUp(_:)), #selector(exportSQL(_:)), #selector(exportImage(_:)), #selector(copyImage(_:)), #selector(exportDictionary(_:)), #selector(exportDocument(_:)),
-             #selector(exportAstah(_:)):
+        case #selector(tidyUp(_:)), #selector(exportSQL(_:)), #selector(exportImage(_:)), #selector(copyImage(_:)), #selector(exportDictionary(_:)), #selector(exportDocument(_:)):
             return !d.entities.isEmpty
+        // A file with only activity diagrams is something to hand to Astah too.
+        case #selector(exportAstah(_:)): return !d.entities.isEmpty || d.activities.contains { !$0.nodes.isEmpty }
         case #selector(setNotation(_:)): item.state = (item.representedObject as? String) == d.display.notation.rawValue ? .on : .off
         case #selector(setNames(_:)): item.state = (item.representedObject as? String) == d.display.names.rawValue ? .on : .off
         case #selector(setDetail(_:)): item.state = (item.representedObject as? String) == d.display.level.rawValue ? .on : .off
@@ -288,7 +329,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     /// PNG, JPEG, PDF or SVG; light or dark, with or without a background, and for the two made of dots how fine.
     @objc func exportImage(_ sender: Any?) {
         let options = ImageOptionsView()
-        let scene = Scene(store.diagram)
+        let scene = store.drawing
         let panel = NSSavePanel()
         panel.nameFieldStringValue = baseName + "." + options.format.rawValue
         panel.allowedContentTypes = [options.format.type]
@@ -328,7 +369,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
 
     /// The diagram on the clipboard, as it looks now: pastes into Pages, Word, Keynote, Slack.
     @objc func copyImage(_ sender: Any?) {
-        let scene = Scene(store.diagram)
+        let scene = store.drawing
         let dark = window?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let pb = NSPasteboard.general
         pb.clearContents()
@@ -351,14 +392,16 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
 }
 
 extension EditorWindowController {
-    /// The diagram as an Astah Professional project: the same entities, keys, relationships, places and lines.
+    /// The diagram as an Astah Professional project: the same entities, keys, relationships, places and lines, and
+    /// the activity diagrams with the same nodes, arrows and swimlanes.
     @objc func exportAstah(_ sender: Any?) {
         let d = store.diagram
         let layout = Scene(d).astaLayout
+        let activities = ActivityScene.layouts(of: d)
         var options = AstaExport.Options()
         options.diagramName = baseName
         save(baseName + "." + AstaExport.fileExtension, types: [UTType(filenameExtension: AstaExport.fileExtension) ?? .data]) { url in
-            try AstaExport.data(for: d, layout: layout, options: options, others: Scene.astaOthers(of: d)).write(to: url)
+            try AstaExport.data(for: d, layout: layout, options: options, others: Scene.astaOthers(of: d), activities: activities).write(to: url)
         }
     }
 }
@@ -388,12 +431,12 @@ enum ImageFormat: String, CaseIterable {
 }
 
 extension Picture {
-    static func data(_ scene: Scene, format: ImageFormat, dark: Bool, transparent: Bool, scale: CGFloat = 2) -> Data? {
+    static func data(_ scene: any Drawing, format: ImageFormat, dark: Bool, transparent: Bool, scale: CGFloat = 2) -> Data? {
         switch format {
         case .png: png(scene, dark: dark, transparent: transparent, scale: scale)
         case .jpg: jpeg(scene, dark: dark, scale: scale)
         case .pdf: pdf(scene, dark: dark, transparent: transparent)
-        case .svg: Data(SVG.document(scene, dark: dark, transparent: transparent).utf8)
+        case .svg: Data(scene.svg(dark: dark, transparent: transparent).utf8)
         }
     }
 }

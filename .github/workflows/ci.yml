@@ -59,6 +59,9 @@ jobs:
           .build/debug/Schema --export="$out/shop.xlsx" && unzip -tq "$out/shop.xlsx"
           .build/debug/Schema --from-sheet="$out/shop.xlsx" --export="$out/back.sql" && grep -c "^CREATE TABLE" "$out/back.sql" | grep -q "^8$"
           .build/debug/Schema --features --export="$out/all.svg" && xmllint --noout "$out/all.svg"
+          .build/debug/Schema --features --activity --export="$out/flow.svg" && xmllint --noout "$out/flow.svg" && grep -q ">Check stock<" "$out/flow.svg"
+          .build/debug/Schema --features --only-activities --export="$out/flow.asta" && unzip -l "$out/flow.asta" | grep -q " EntityStore$"
+          .build/debug/Schema --features --export="$out/all.astalist" && grep -q "^ACTIVITY Order flow|nodes=18|flows=17|lanes=3" "$out/all.astalist"
           .build/debug/Schema --features --export="$out/all.html" && grep -q "<h2 id=\"person\">Person</h2>" "$out/all.html"
           .build/debug/Schema --features --sql-options=drop,quote,after,ifnotexists --dialect=sqlite --export="$out/opts.sql" && sqlite3 :memory: < "$out/opts.sql"
       - name: A script changes the diagram, and a compare with itself finds nothing

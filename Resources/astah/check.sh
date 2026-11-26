@@ -1,10 +1,12 @@
 #!/bin/sh
 # Checks the Astah export against Astah itself: exports diagrams, has your copy of Astah Professional open each
-# file (through its API, no window), and compares what Astah found with what was in the diagram, line by line.
+# file (through its API, no window), and compares what Astah found with what was in the diagram, line by line:
+# the ER model, and every node, arrow and swimlane of the activity diagrams.
 # Astah then validates each file, changes it and saves it again, and draws it as a PNG to look at.
 #
-#   Resources/astah/check.sh                 the sample in each notation and level of detail, and a diagram
-#                                            with one of everything (subtypes, indexes, kinds, domains, counts)
+#   Resources/astah/check.sh                 the sample in each notation and level of detail, a diagram with
+#                                            one of everything (subtypes, indexes, kinds, domains, counts, an
+#                                            activity diagram), and activity diagrams by themselves
 #   Resources/astah/check.sh my.mschema …    your own diagrams (or .sql files) as well
 #
 # Needs Astah Professional (the 20-day trial will do). It is found in /Applications, or set ASTAH_APP to the
@@ -33,11 +35,11 @@ check() {
     "$BIN" "$@" --export="$OUT/$name.astalist" >/dev/null
     "$JAVA/java" -Djava.awt.headless=true -cp "$OUT/classes:$CP" AstahCheck "$OUT/$name.asta" "$OUT/$name.astah.txt" "$OUT/$name.resaved.asta" 2>&1 | quiet
     if diff "$OUT/$name.astalist" "$OUT/$name.astah.txt" >"$OUT/$name.diff"; then
-        echo "ok    $name: Astah shows the same $(grep -c "^ENTITY" "$OUT/$name.astalist") entities, $(grep -c "^ATTR" "$OUT/$name.astalist") attributes and $(grep -c "^REL" "$OUT/$name.astalist") relationships"
+        echo "ok    $name: Astah shows the same $(grep -c "^ENTITY" "$OUT/$name.astalist") entities, $(grep -c "^ATTR" "$OUT/$name.astalist") attributes, $(grep -c "^REL" "$OUT/$name.astalist") relationships, $(grep -c "^NODE" "$OUT/$name.astalist") activity nodes and $(grep -c "^FLOW" "$OUT/$name.astalist") arrows"
     else
         echo "FAIL  $name: Astah shows something else (< the diagram, > Astah):"; head -20 "$OUT/$name.diff"; failed=1
     fi
-    "$JAVA/java" -Djava.awt.headless=true -cp "$CP" com.change_vision.jude.cmdline.JudeCommandRunner -image er -f "$OUT/$name.asta" -t png -o "$OUT/pictures" 2>&1 | quiet
+    "$JAVA/java" -Djava.awt.headless=true -cp "$CP" com.change_vision.jude.cmdline.JudeCommandRunner -image all -f "$OUT/$name.asta" -t png -o "$OUT/pictures" 2>&1 | quiet
 }
 
 check sample
@@ -48,6 +50,10 @@ check sample-names --detail=namesOnly
 check features --features
 check features-idef1x --features --notation=idef1x
 check empty --empty
+# Activity diagrams: other sizes, colours and names and a second diagram; then a file with nothing but them.
+check activities --features --script=Resources/astah/activity-variants.js
+check activities-only --features --only-activities
+check activity-empty --empty --activity
 n=0
 for file in "$@"; do
     n=$((n + 1))

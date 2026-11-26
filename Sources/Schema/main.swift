@@ -201,6 +201,9 @@ enum MainMenu {
                 item("With the Selected Entities", #selector(W.newSheet(_:)), "", tag: 2),
                 item("A Copy of This One", #selector(W.newSheet(_:)), "", tag: 3),
             ]),
+            item("New Activity Diagram", #selector(W.newActivity(_:)), ""),
+            submenu("Add to the Activity Diagram", ActivityNode.Kind.allCases.map { item($0.title, #selector(W.addActivityNode(_:)), "", represented: $0.rawValue) }
+                + [.separator(), item("Swimlane", #selector(W.addSwimlane(_:)), "")]),
             item("Rename This Diagram…", #selector(W.renameSheet(_:)), ""),
             item("Delete This Diagram", #selector(W.deleteSheet(_:)), ""),
             item("Next Diagram", #selector(W.nextSheet(_:)), "}", [.command]),
@@ -326,6 +329,19 @@ enum Headless {
         if let v = Flags.value("notation").flatMap(Notation.init(rawValue:)) { diagram.display.notation = v }
         if let v = Flags.value("names").flatMap(NameDisplay.init(rawValue:)) { diagram.display.names = v }
         if let v = Flags.value("detail").flatMap(DetailLevel.init(rawValue:)) { diagram.display.level = v }
+        // --only-activities: the activity diagrams without the model, as a file that has nothing else.
+        if Flags.has("only-activities") {
+            var bare = Diagram()
+            bare.activities = diagram.activities
+            diagram = bare
+        }
+        // --activity[=name]: shows an activity diagram (the first, or the one with that name), so a picture or a
+        // snapshot is of that one. A file without any gets an empty one.
+        if Flags.has("activity") || Flags.value("activity") != nil {
+            let name = Flags.value("activity")?.lowercased() ?? ""
+            if let found = diagram.activities.first(where: { name.isEmpty || $0.name.lowercased() == name }) { diagram.activity = found.id }
+            else { diagram.addActivity(named: name.isEmpty ? nil : Flags.value("activity")) }
+        }
         // --script=<file.js>: runs a script on the diagram before anything else is done with it, and prints what it logged.
         if let path = Flags.value("script") {
             guard let source = try? String(contentsOfFile: path, encoding: .utf8) else { fail("Couldn't read \(path)") }
@@ -362,7 +378,7 @@ enum Headless {
         after(0.7) {
             if Flags.has("selftest") { SelfTest.run(doc.store); return }
             if Flags.bench { SelfTest.bench(doc.store, tables: Flags.value("bench").flatMap(Int.init) ?? 1000); return }
-            doc.store.canvas?.zoomToFit()
+            doc.store.zoomToFit()
             // --edit=<entity>: with the line for a new attribute open, as while typing.
             if let name = Flags.value("edit"), let e = doc.store.diagram.entities.first(where: { $0.name.lowercased() == name.lowercased() }) {
                 doc.store.canvas?.beginEdit(.newAttribute(entity: e.id))
@@ -411,7 +427,14 @@ enum Headless {
         if let name = Flags.value("select") {
             let ids = name.split(separator: ",").compactMap { n in store.diagram.entities.first { $0.name.lowercased() == n.lowercased() }?.id }
             if !ids.isEmpty { store.selection = .entities(Set(ids)) }
+            // On an activity diagram the names are those of its nodes and swimlanes.
+            if let shown = store.diagram.shownActivity {
+                let wanted = Set(name.split(separator: ",").map { $0.lowercased() })
+                store.activityParts = Set(shown.nodes.filter { wanted.contains($0.name.lowercased()) }.map(\.id) + shown.lanes.filter { wanted.contains($0.name.lowercased()) }.map(\.id))
+            }
         }
+        // --arrow=n: the nth arrow of the activity diagram being shown.
+        if let n = Flags.value("arrow").flatMap(Int.init), let flows = store.diagram.shownActivity?.flows, flows.indices.contains(n) { store.activityParts = [flows[n].id] }
         if let n = Flags.value("relationship").flatMap(Int.init), store.diagram.relationships.indices.contains(n) {
             store.selection = .relationship(store.diagram.relationships[n].id)
         }
@@ -436,7 +459,8 @@ enum Headless {
 
     /// `--print=<file.pdf>`: what File › Print puts on paper, saved as a PDF without a print panel.
     static func printed(_ diagram: Diagram, to path: String) -> Never {
-        let view = Picture.PrintView(scene: Scene(diagram), title: "Diagram", fit: !Flags.has("tiled"), marks: true)
+        let shown: any Drawing = diagram.shownActivity.map { ActivityScene($0) } ?? Scene(diagram)
+        let view = Picture.PrintView(scene: shown, title: "Diagram", fit: !Flags.has("tiled"), marks: true)
         let info = NSPrintInfo()
         info.orientation = view.area.width > view.area.height * 1.15 ? .landscape : .portrait
         info.jobDisposition = .save
@@ -460,14 +484,16 @@ enum Headless {
                 // --scale=1…4: how fine a PNG or JPEG is.
                 let format = ImageFormat(rawValue: url.pathExtension.lowercased()) ?? .png
                 let scale = CGFloat(min(4, max(1, Flags.value("scale").flatMap(Int.init) ?? 2)))
-                try (Picture.data(scene, format: format, dark: dark, transparent: Flags.has("transparent"), scale: scale) ?? Data()).write(to: url)
+                let shown: any Drawing = diagram.shownActivity.map { ActivityScene($0) } ?? scene
+                try (Picture.data(shown, format: format, dark: dark, transparent: Flags.has("transparent"), scale: scale) ?? Data()).write(to: url)
             case "html": try DocumentExport.html(for: diagram, scene: scene, title: "Diagram").write(to: url, atomically: true, encoding: .utf8)
             // --print=<file.pdf> [--tiled]: what File › Print puts on paper, as a PDF.
             case "sql": try SQLExport.script(for: diagram).write(to: url, atomically: true, encoding: .utf8)
             case "md": try Report.markdown(for: diagram, title: "Diagram").write(to: url, atomically: true, encoding: .utf8)
             case "csv": try Report.csv(for: diagram).write(to: url, atomically: true, encoding: .utf8)
             case "xlsx": try Report.workbook(for: diagram).xlsx().write(to: url)
-            case AstaExport.fileExtension: try AstaExport.data(for: diagram, layout: scene.astaLayout, others: Scene.astaOthers(of: diagram)).write(to: url)
+            case AstaExport.fileExtension:
+                try AstaExport.data(for: diagram, layout: scene.astaLayout, others: Scene.astaOthers(of: diagram), activities: ActivityScene.layouts(of: diagram)).write(to: url)
             // What Astah should show after opening that file (see Resources/astah).
             case "astalist": try AstaExport.manifest(for: diagram).write(to: url, atomically: true, encoding: .utf8)
             case schemaExtension: try diagram.encoded().write(to: url)

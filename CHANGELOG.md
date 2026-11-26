@@ -3,6 +3,16 @@
 Every release of Maben Schema. The newest version is at the top. `publish.sh` uses the section for the version it
 releases as the GitHub release notes, and schema.maben.gg/changelog is built from this file.
 
+## 0.3 · not released yet
+
+- Activity diagrams, in the same file as the ER diagrams, each as a tab of its own (Diagram › New Activity Diagram, or the + beside the tabs): a start, actions, decisions and merges, forks and joins, an end and the end of one flow, objects, signals sent and received, a wait for a time, an action that is another activity, connectors, notes and text
+- Double-click the canvas for an action and type its name; drag a dot from one node to the next for an arrow, or let go on the empty canvas and the next action is made there; double-click an arrow to say when that way is taken
+- Swimlanes for who does what: a node is in the swimlane it lies in, and dragging a swimlane's edge keeps everything in its own
+- Arrows bend through points of your own; nodes take a size and colours of their own; align, copy, paste and duplicate work as on an ER diagram, and every change can be undone
+- Pictures (PNG, JPEG, PDF, SVG), Copy Diagram as Image and Print are of the diagram being shown; Export Document adds every activity diagram
+- Export for Astah takes the activity diagrams along: Astah Professional opens them as activity diagrams with the same nodes, arrows, conditions and swimlanes, in the same places. The ER part of the file is written exactly as before
+- A file with an activity diagram is saved in the newer file format, which version 0.1 refuses to open rather than lose it
+
 ## 0.2 · 26 November 2026
 
 - Subtypes: a relationship can say "is a kind of", with the attribute that tells the kinds apart and whether the kinds are all there are

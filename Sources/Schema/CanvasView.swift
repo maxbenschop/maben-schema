@@ -77,6 +77,15 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
     override var acceptsFirstResponder: Bool { true }
     override var isOpaque: Bool { true }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Back from an activity diagram's tab: the canvas takes the keys again.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window, !(window.firstResponder is NSTextView), self.store.diagram.activity == nil else { return }
+            window.makeFirstResponder(self)
+        }
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
@@ -289,31 +298,7 @@ final class CanvasView: NSView, NSTextFieldDelegate, NSMenuItemValidation {
     }
 
     /// Dots every other grid step (every 20 points as it comes); five times as far apart when zoomed far out.
-    private func drawGrid() {
-        guard Grid.show else { return }
-        let step = CGFloat(Grid.size) * 2
-        var spacing = step * zoom
-        if spacing < 9 { spacing = step * 5 * zoom }
-        guard spacing >= 9 else { return }
-        NSGraphicsContext.current?.cgContext.setFillColor(MB.nsWash(zoom < 0.6 ? 0.1 : 0.13).cgColor)
-        let size: CGFloat = 1.5
-        var x = offset.x.truncatingRemainder(dividingBy: spacing)
-        if x < 0 { x += spacing }
-        let firstY: CGFloat = {
-            let y = offset.y.truncatingRemainder(dividingBy: spacing)
-            return y < 0 ? y + spacing : y
-        }()
-        var rects: [CGRect] = []
-        while x < bounds.width {
-            var y = firstY
-            while y < bounds.height {
-                rects.append(CGRect(x: x - size / 2, y: y - size / 2, width: size, height: size))
-                y += spacing
-            }
-            x += spacing
-        }
-        NSGraphicsContext.current?.cgContext.fill(rects)
-    }
+    private func drawGrid() { Grid.drawDots(in: bounds, offset: offset, zoom: zoom) }
 
     // MARK: Mouse
 

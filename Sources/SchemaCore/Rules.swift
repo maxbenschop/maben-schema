@@ -9,6 +9,9 @@ extension Diagram {
         let ids = Set(entities.map(\.id))
         relationships.removeAll { !ids.contains($0.parent) || !ids.contains($0.child) }
         pruneSheets()
+        // An arrow in an activity diagram goes with the node it started or ended at.
+        for i in activities.indices { activities[i].prune() }
+        if let shown = activity, !activities.contains(where: { $0.id == shown }) { activity = nil }
         // A note about an entity that is gone is just a note.
         for i in annotations.indices where annotations[i].entity != nil {
             if let e = annotations[i].entity, !ids.contains(e) { annotations[i].entity = nil; annotations[i].attribute = nil }
