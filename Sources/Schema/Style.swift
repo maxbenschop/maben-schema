@@ -63,9 +63,7 @@ enum MB {
 extension NSColor {
     /// `#RRGGBB` (or `RRGGBB`); nil for anything else, an empty text included.
     convenience init?(hex: String) {
-        var text = hex.trimmingCharacters(in: .whitespaces)
-        if text.hasPrefix("#") { text.removeFirst() }
-        guard text.count == 6, let value = UInt32(text, radix: 16) else { return nil }
+        guard let value = HexColor.value(hex) else { return nil }
         self.init(srgbRed: CGFloat(value >> 16 & 0xFF) / 255, green: CGFloat(value >> 8 & 0xFF) / 255, blue: CGFloat(value & 0xFF) / 255, alpha: 1)
     }
 

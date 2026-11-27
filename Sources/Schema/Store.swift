@@ -479,7 +479,9 @@ final class DiagramStore: ObservableObject {
     /// Pastes copied entities, or CREATE TABLE statements copied from anywhere.
     func paste(at point: CGPoint? = nil) {
         let pb = pasteboard
-        if let data = pb.data(forType: Self.pasteboardType), let part = try? JSONDecoder().decode(Diagram.self, from: data) {
+        if let data = pb.data(forType: Self.pasteboardType), var part = try? JSONDecoder().decode(Diagram.self, from: data) {
+            // The clipboard is anyone's: what comes off it is checked like a file.
+            part.sanitize()
             insert(part, at: point, name: "Paste")
         } else if let text = pb.string(forType: .string), text.range(of: "create table", options: .caseInsensitive) != nil {
             importSQL(text, replace: false, at: point)
@@ -578,20 +580,30 @@ final class DiagramStore: ObservableObject {
         return result
     }
 
-    /// Reads a spreadsheet (.xlsx or .csv) with a row per attribute, and adds its entities.
+    /// Reads a spreadsheet (.xlsx or .csv) with a row per attribute, and adds its entities. Read in the
+    /// background, like a SQL file: a workbook can be large, and one made to be slow must not freeze the window.
     func importSheet(_ url: URL) {
-        do {
-            let result = try SheetImport.parse(contentsOf: url)
-            guard result.tables > 0 else {
-                let alert = NSAlert()
-                alert.messageText = "No entities in \(url.lastPathComponent)"
-                alert.informativeText = "It needs a sheet with a row per attribute, and a header that names at least the entity (or table) and the attribute (or column). Type, primary key, not null, unique, default, definition and references are read when they are there."
-                if let window { alert.beginSheetModal(for: window, completionHandler: nil) } else { alert.runModal() }
-                return
+        importTask?.cancel()
+        busy = "Reading \(url.lastPathComponent)…"
+        importTask = Task { [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<SQLImport.Result, Error> in
+                Result { try SheetImport.parse(contentsOf: url) }
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            self.busy = nil
+            switch outcome {
+            case .failure(let error):
+                showError(error, in: self.window, title: "Couldn’t read \(url.lastPathComponent)")
+            case .success(let result):
+                guard result.tables > 0 else {
+                    let alert = NSAlert()
+                    alert.messageText = "No entities in \(url.lastPathComponent)"
+                    alert.informativeText = "It needs a sheet with a row per attribute, and a header that names at least the entity (or table) and the attribute (or column). Type, primary key, not null, unique, default, definition and references are read when they are there."
+                    if let window = self.window { alert.beginSheetModal(for: window, completionHandler: nil) } else { alert.runModal() }
+                    return
+                }
+                self.importResult(result, replace: false)
             }
-            importResult(result, replace: false)
-        } catch {
-            showError(error, in: window, title: "Couldn’t read \(url.lastPathComponent)")
         }
     }
 
@@ -759,18 +771,30 @@ final class DiagramStore: ObservableObject {
         compare(with: url)
     }
 
+    /// Reads the other file in the background (it can be a dump or a workbook of any size), then shows the sheet.
     func compare(with url: URL) {
-        do {
-            let other: Diagram
-            switch url.pathExtension.lowercased() {
-            case schemaExtension: other = try Diagram.decode(Data(contentsOf: url))
-            case "xlsx", "csv": other = try SheetImport.parse(contentsOf: url).diagram
-            default: other = try SQLImport.parse(contentsOf: url).diagram
+        importTask?.cancel()
+        busy = "Reading \(url.lastPathComponent)…"
+        let kind = url.pathExtension.lowercased()
+        importTask = Task { [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<Diagram, Error> in
+                Result {
+                    switch kind {
+                    case schemaExtension: try Diagram.decode(Data(contentsOf: url))
+                    case "xlsx", "csv": try SheetImport.parse(contentsOf: url).diagram
+                    default: try SQLImport.parse(contentsOf: url, isCancelled: { Task.isCancelled }).diagram
+                    }
+                }
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            self.busy = nil
+            switch outcome {
+            case .failure(let error):
+                showError(error, in: self.window, title: "Couldn’t read \(url.lastPathComponent)")
+            case .success(let other):
+                self.compared = (url.lastPathComponent, other)
+                self.sheet = .compare
             }
-            compared = (url.lastPathComponent, other)
-            sheet = .compare
-        } catch {
-            showError(error, in: window, title: "Couldn’t read \(url.lastPathComponent)")
         }
     }
 
@@ -907,11 +931,15 @@ final class DiagramStore: ObservableObject {
 
     /// A picture on the canvas, no wider than 480 points to start with.
     func addImage(_ data: Data, at point: CGPoint? = nil) {
-        guard let image = NSImage(data: data), image.size.width > 0 else { NSSound.beep(); return }
-        // Kept in the file as PNG; a large photo is brought down to what a diagram needs.
+        // Only what starts as a picture is read as one: a file can be called .png and be anything.
+        guard EmbeddedImage(data: data) != nil, let image = NSImage(data: data), image.size.width > 0 else { NSSound.beep(); return }
+        // Kept in the file as it came when it is a kind every browser draws (PNG, JPEG, GIF, WebP), as PNG when it
+        // isn't (TIFF, HEIC); a large photo is brought down to what a diagram needs.
         var stored = data
         if data.count > 600_000, let rep = NSBitmapImageRep(data: data) {
             stored = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) ?? data
+        } else if EmbeddedImage(data: data)?.format.isForTheWeb != true, let png = NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:]) {
+            stored = png
         }
         let scale = min(1, 480 / image.size.width)
         let p = point ?? canvas?.visibleCentre ?? CGPoint(x: 200, y: 160)
@@ -938,7 +966,8 @@ final class DiagramStore: ObservableObject {
         guard !ids.isEmpty || !notes.isEmpty else { return }
         edit(toFront ? "Bring to Front" : "Send to Back") { d in
             if !ids.isEmpty {
-                let others = d.entities.filter { !ids.contains($0.id) }.map(\.z)
+                // Kept within what a layer can be, so one more is always there to take.
+                let others = d.entities.filter { !ids.contains($0.id) }.map { Geometry.layer($0.z) }
                 let z = toFront ? (others.max() ?? 0) + 1 : (others.min() ?? 0) - 1
                 for id in ids { d.update(entity: id) { $0.z = z } }
             }

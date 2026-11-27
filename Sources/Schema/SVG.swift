@@ -24,12 +24,21 @@ enum SVG {
         }
     }
 
-    private static func n(_ v: Double) -> String {
-        let r = (v * 100).rounded() / 100
-        return r == r.rounded() ? String(Int(r)) : String(r)
-    }
-    private static func n(_ v: CGFloat) -> String { n(Double(v)) }
+    // Everything that goes into the picture goes through one of these three: a number is written as a number
+    // (whatever the diagram says it is), text is escaped, and a picture is written out again from its own bytes.
+    // A diagram can come from anyone, and the SVG is a file that gets passed on and opened in a browser.
+    private static func n(_ v: Double) -> String { Safe.decimal(v) }
+    private static func n(_ v: CGFloat) -> String { Safe.decimal(Double(v)) }
     private static func escape(_ s: String) -> String { Workbook.escape(s) }
+
+    /// A picture on the canvas as the address an SVG shows it from: `data:image/png;base64,…`. Nil for anything
+    /// that isn't a picture (it is then left out). The kinds a browser doesn't draw (TIFF, HEIC) become PNG first.
+    static func address(ofPicture base64: String) -> String? {
+        guard let image = EmbeddedImage(base64: base64) else { return nil }
+        if let address = image.dataURL { return address }
+        guard let png = NSBitmapImageRep(data: image.data)?.representation(using: .png, properties: [:]) else { return nil }
+        return EmbeddedImage(data: png)?.dataURL
+    }
 
     static func document(_ scene: Scene, dark: Bool, transparent: Bool, margin: CGFloat = 40) -> String {
         let ink = Ink(appearance: Picture.appearance(dark: dark))
@@ -83,9 +92,9 @@ enum SVG {
                     }
                 }
             case .image:
-                if !a.image.isEmpty {
-                    let type = a.image.hasPrefix("/9j/") ? "jpeg" : "png"
-                    s += "<image x=\"\(n(f.minX))\" y=\"\(n(f.minY))\" width=\"\(n(f.width))\" height=\"\(n(f.height))\" preserveAspectRatio=\"none\" href=\"data:image/\(type);base64,\(a.image)\"/>\n"
+                // Never the text from the file itself: only what `address` made of it.
+                if let address = address(ofPicture: a.image) {
+                    s += "<image x=\"\(n(f.minX))\" y=\"\(n(f.minY))\" width=\"\(n(f.width))\" height=\"\(n(f.height))\" preserveAspectRatio=\"none\" href=\"\(address)\"/>\n"
                 }
             }
             return s

@@ -14,7 +14,8 @@ public enum AutoLayout {
         let entities = d.entities.filter { ids?.contains($0.id) ?? true }
         guard !entities.isEmpty else { return [:] }
         let included = Set(entities.map(\.id))
-        let order = Dictionary(uniqueKeysWithValues: entities.enumerated().map { ($1.id, $0) })
+        // The first place an id has wins: two entities with one id must not stop the app here.
+        let order = Dictionary(entities.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
 
         var parents: [UUID: [UUID]] = [:], children: [UUID: [UUID]] = [:]
         for r in d.relationships where r.parent != r.child && included.contains(r.parent) && included.contains(r.child) {
@@ -23,20 +24,9 @@ public enum AutoLayout {
             children[r.parent, default: []].append(r.child)
         }
 
-        // Rows: an entity sits one row below its lowest parent. Circles are cut where they close.
-        var row: [UUID: Int] = [:]
-        var visiting: Set<UUID> = []
-        func depth(_ id: UUID) -> Int {
-            if let known = row[id] { return known }
-            guard visiting.insert(id).inserted else { return 0 }
-            let value = (parents[id] ?? []).filter { !visiting.contains($0) }.map { depth($0) + 1 }.max() ?? 0
-            visiting.remove(id)
-            row[id] = value
-            return value
-        }
         let linked = entities.filter { parents[$0.id] != nil || children[$0.id] != nil }
         let loose = entities.filter { parents[$0.id] == nil && children[$0.id] == nil }
-        for e in linked { _ = depth(e.id) }
+        let row = rows(of: linked.map(\.id), parents: parents)
 
         var rows: [[UUID]] = []
         for e in linked {
@@ -95,5 +85,38 @@ public enum AutoLayout {
             y += line.height + rowGap
         }
         return out
+    }
+
+    /// The row each entity sits in: one below its lowest parent, 0 for one without. Circles are cut where they close.
+    /// Walked with a list of its own, not by a function calling itself: a chain of tables can be far longer than a
+    /// thread's stack is deep (60,000 tables each pointing at the one before stopped the app).
+    static func rows(of ids: [UUID], parents: [UUID: [UUID]]) -> [UUID: Int] {
+        var row: [UUID: Int] = [:]
+        struct Step { let id: UUID; var next = 0; var depth = 0 }
+        for id in ids where row[id] == nil {
+            var path = [Step(id: id)]
+            var visiting: Set<UUID> = [id]
+            while let top = path.last {
+                let above = parents[top.id] ?? []
+                if top.next < above.count {
+                    let parent = above[top.next]
+                    path[path.count - 1].next += 1
+                    // A parent that is already on the way here closes a circle: it doesn't count.
+                    if visiting.contains(parent) { continue }
+                    if let known = row[parent] {
+                        path[path.count - 1].depth = max(path[path.count - 1].depth, known + 1)
+                    } else {
+                        visiting.insert(parent)
+                        path.append(Step(id: parent))
+                    }
+                } else {
+                    path.removeLast()
+                    visiting.remove(top.id)
+                    row[top.id] = top.depth
+                    if !path.isEmpty { path[path.count - 1].depth = max(path[path.count - 1].depth, top.depth + 1) }
+                }
+            }
+        }
+        return row
     }
 }

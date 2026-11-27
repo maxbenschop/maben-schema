@@ -159,22 +159,71 @@ final class RulesTests: XCTestCase {
 }
 
 final class ReleaseFeedTests: XCTestCase {
-    let sample = #"{"tag_name":"v1.2","draft":false,"prerelease":false,"html_url":"https://github.com/maxbenschop/maben-schema/releases/tag/v1.2","body":"- Faster lines","assets":[{"name":"Maben-Schema.dmg","browser_download_url":"https://github.com/a.dmg"},{"name":"Maben-Schema.zip","browser_download_url":"https://github.com/a.zip"}]}"#
+    let sample = #"{"tag_name":"v1.2","draft":false,"prerelease":false,"html_url":"https://github.com/maxbenschop/maben-schema/releases/tag/v1.2","body":"- Faster lines","assets":[{"name":"Maben-Schema.dmg","browser_download_url":"https://github.com/maxbenschop/maben-schema/releases/download/v1.2/Maben-Schema.dmg"},{"name":"Maben-Schema.zip","browser_download_url":"https://github.com/maxbenschop/maben-schema/releases/download/v1.2/Maben-Schema.zip"}]}"#
+    let zip = "https://github.com/maxbenschop/maben-schema/releases/download/v1.2/Maben-Schema.zip"
 
     func testParsesAPublishedRelease() {
         let release = ReleaseFeed.parse(Data(sample.utf8))
         XCTAssertEqual(release?.version, "1.2")
-        XCTAssertEqual(release?.zip.absoluteString, "https://github.com/a.zip")
+        XCTAssertEqual(release?.zip.absoluteString, zip)
+        XCTAssertEqual(release?.page.absoluteString, "https://github.com/maxbenschop/maben-schema/releases/tag/v1.2")
         XCTAssertEqual(release?.notes, "- Faster lines")
         XCTAssertEqual(ReleaseFeed.url.absoluteString, "https://api.github.com/repos/maxbenschop/maben-schema/releases/latest")
     }
 
     func testIgnoresDraftsPrereleasesAndReleasesWithoutTheZip() {
         for (a, b) in [(#""draft":false"#, #""draft":true"#), (#""prerelease":false"#, #""prerelease":true"#),
-                       ("Maben-Schema.zip", "Other.zip"), ("https://github.com/a.zip", "http://github.com/a.zip")] {
+                       (#""name":"Maben-Schema.zip""#, #""name":"Other.zip""#), (zip, zip.replacingOccurrences(of: "https:", with: "http:"))] {
             XCTAssertNil(ReleaseFeed.parse(Data(sample.replacingOccurrences(of: a, with: b).utf8)), b)
         }
         XCTAssertNil(ReleaseFeed.parse(Data("not json".utf8)))
+    }
+
+    /// The update is downloaded from this repository's releases on github.com, and from nowhere that only looks like it.
+    func testTheDownloadMustBeOursOnGitHub() {
+        let tail = "/maxbenschop/maben-schema/releases/download/v1.2/Maben-Schema.zip"
+        for bad in ["https://evil.example\(tail)", "https://github.com.evil.example\(tail)", "https://github.com@evil.example\(tail)",
+                    "https://user:pw@github.com\(tail)", "https://github.com:8443\(tail)", "https://GITHUB.COM/someone/else/releases/download/v1.2/Maben-Schema.zip",
+                    "https://github.com/maxbenschop/maben-schema/releases/download/../../../../someone/else/releases/download/v1/Maben-Schema.zip",
+                    "https://github.com/maxbenschop/maben-schema/releases/download/%2e%2e/%2e%2e/x.zip",
+                    "https://github.com/maxbenschop/maben-schema-evil/releases/download/v1.2/Maben-Schema.zip",
+                    "https://github.com/maxbenschop/maben-schema/archive/main.zip", "file:///tmp/Maben-Schema.zip", "ftp://github.com\(tail)"] {
+            XCTAssertNil(ReleaseFeed.parse(Data(sample.replacingOccurrences(of: zip, with: bad).utf8)), bad)
+            if let url = URL(string: bad) { XCTAssertFalse(ReleaseFeed.isDownload(url), bad) }
+        }
+        XCTAssertNotNil(ReleaseFeed.parse(Data(sample.replacingOccurrences(of: zip, with: "https://GitHub.com\(tail)").utf8)), "the host in capitals is the same host")
+        XCTAssertNotNil(ReleaseFeed.parse(Data(sample.replacingOccurrences(of: zip, with: "https://github.com:443\(tail)").utf8)), "the usual port, written out")
+    }
+
+    /// The page the app opens in the browser is one on github.com, or this repository's own releases page.
+    func testTheReleasePageIsOnlyOpenedOnGitHub() {
+        let page = "https://github.com/maxbenschop/maben-schema/releases/tag/v1.2"
+        XCTAssertEqual(ReleaseFeed.releasesPage.absoluteString, "https://github.com/maxbenschop/maben-schema/releases")
+        for bad in ["http://github.com/maxbenschop/maben-schema/releases/tag/v1.2", "https://evil.example/page", "file:///Applications/Calculator.app",
+                    "javascript:alert(1)", "https://github.com@evil.example/", "x-apple.systempreferences:", "https://user@github.com/x", "https://github.com:8443/x",
+                    "https://github.com/a/../../b", "not a url at all", ""] {
+            let release = ReleaseFeed.parse(Data(sample.replacingOccurrences(of: page, with: bad).utf8))
+            XCTAssertNotNil(release, "the release is still one: \(bad)")
+            XCTAssertEqual(release?.page, ReleaseFeed.releasesPage, bad)
+        }
+        // No page given at all.
+        XCTAssertEqual(ReleaseFeed.parse(Data(sample.replacingOccurrences(of: #""html_url":"\#(page)","#, with: "").utf8))?.page, ReleaseFeed.releasesPage)
+    }
+
+    func testAVersionIsNumbersAndPoints() {
+        for bad in ["v1.2'; rm -rf /", "v", "v1..2", "latest", "v1.2 ", "v1.2\\n"] {
+            XCTAssertNil(ReleaseFeed.parse(Data(sample.replacingOccurrences(of: #""tag_name":"v1.2""#, with: "\"tag_name\":\"\(bad)\"").utf8)), bad)
+        }
+        XCTAssertEqual(ReleaseFeed.parse(Data(sample.replacingOccurrences(of: #""tag_name":"v1.2""#, with: #""tag_name":"10.0.3""#).utf8))?.version, "10.0.3")
+    }
+
+    /// Release notes are text from the internet: bold and code as written, and a link only to an https address.
+    func testNotesOnlyLinkToHTTPS() {
+        let notes = ReleaseFeed.formatted(notes: "**New**: [the site](https://schema.maben.gg), [plain](http://example.com), [script](javascript:alert(1)), [file](file:///etc/passwd), [app](schema://x)")
+        XCTAssertEqual(String(notes.characters), "New: the site, plain, script, file, app", "the words stay")
+        let links = notes.runs.compactMap(\.link)
+        XCTAssertEqual(links.map(\.absoluteString), ["https://schema.maben.gg"])
+        XCTAssertEqual(String(ReleaseFeed.formatted(notes: "- one\n- two").characters), "- one\n- two")
     }
 
     func testVersionOrder() {

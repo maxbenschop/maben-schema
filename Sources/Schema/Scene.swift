@@ -227,7 +227,8 @@ final class Scene {
     }
 
     var sizes: [UUID: Size] {
-        Dictionary(uniqueKeysWithValues: boxes.map { ($0.id, Size(Double($0.frame.width), Double($0.frame.height))) })
+        // Two boxes with one id (a file put together by hand) must not stop the app: the first counts.
+        Dictionary(boxes.map { ($0.id, Size(Double($0.frame.width), Double($0.frame.height))) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// The rectangle around everything, or nil when the diagram is empty.

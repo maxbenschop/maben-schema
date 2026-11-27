@@ -671,7 +671,7 @@ public struct Annotation: Codable, Identifiable, Equatable {
     /// For a note: the entity it is about, and the attribute in it; a thin line is drawn to it.
     public var entity: UUID?
     public var attribute: UUID?
-    /// For an image: the picture itself (PNG or JPEG), as base64.
+    /// For an image: the picture itself (PNG, JPEG, GIF, WebP, TIFF or HEIC), as base64. See `EmbeddedImage`.
     public var image = ""
 
     public init(id: UUID = UUID(), kind: Kind, x: Double = 0, y: Double = 0, width: Double = 0, height: Double = 0, text: String = "", points: [Point] = []) {
@@ -912,6 +912,8 @@ public struct Diagram: Codable, Equatable {
         if d.version > currentVersion { throw DiagramError.newerVersion(d.version) }
         // Which version the file was is only for that check; from here on it is this app's diagram.
         d.version = currentVersion
+        // A file is whatever someone put in it: first make it something the app can draw (see Sanitize.swift).
+        d.sanitize()
         d.normalize()
         return d
     }

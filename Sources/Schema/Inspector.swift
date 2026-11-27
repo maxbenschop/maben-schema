@@ -455,8 +455,10 @@ struct EntityInspector: View {
                     store.edit("Change Links", coalesce: "links\(entity.id)") { $0.update(entity: entity.id) { $0.links = v.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } } }
                 }
             }
-            ForEach(entity.links.filter { URL(string: $0)?.scheme != nil }, id: \.self) { link in
-                Button(link) { if let url = URL(string: link) { NSWorkspace.shared.open(url) } }
+            // Only a web address opens (see `Links`): a link in a diagram from someone else could otherwise start
+            // a file or another app. Anything else stays what it is in the field above: text.
+            ForEach(entity.links.filter { Links.webAddress($0) != nil }, id: \.self) { link in
+                Button(link) { if let url = Links.webAddress(link) { NSWorkspace.shared.open(url) } }
                     .buttonStyle(.plain).font(.system(size: 11.5)).foregroundStyle(MB.accentInk).lineLimit(1)
             }
         }

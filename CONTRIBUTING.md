@@ -5,7 +5,7 @@ Thanks for helping. This page explains how changes get from an idea into a relea
 ## How the code flows
 
 ```
-your fork / branch ──PR──▶ main ──release.sh──▶ tag vX.Y.Z + GitHub release
+your fork / branch ──PR──▶ main ──ship.sh──▶ tag vX.Y.Z + GitHub release
 ```
 
 - **`main`** is always releasable. Every change arrives through a pull request.
@@ -23,7 +23,7 @@ Found a bug or have an idea? Open an issue first if you're not sure it fits; sma
 5. If you change the importer, try it on a real dump: `.build/debug/Schema --inspect=<file.sql>` prints the tables, foreign keys and databases it finds and how long it took. `python3 Resources/make-sample-dump.py` writes a PostgreSQL and a MySQL dump of four databases to try (1.2 million rows).
 6. If you change drawing or anything that runs per change, run the benchmark before and after: `swift build -c release --product Schema && .build/release/Schema --bench`. It times a 1000-table diagram; a 60 Hz screen leaves 16.7 ms per frame.
 7. If you change the Astah export, run `Resources/astah/check.sh`: your copy of Astah Professional opens what was written (no window shows) and what it finds is compared with the diagram, line by line. It needs Astah on your Mac, so CI can't run it; `Resources/astah/README.md` has the details.
-8. If people will notice the change, add a line under the top section of `CHANGELOG.md`. Don't change the version in `Info.plist`; that happens when releasing.
+8. If people will notice the change, add a line under `## Unreleased` at the top of `CHANGELOG.md`. Don't change the version in `Info.plist`; that happens when releasing.
 9. Open a pull request into `main` and fill in the template.
 
 ## What a pull request needs before it's merged
@@ -53,7 +53,24 @@ A change that touches one of these comes with a test that shows the rule still h
 
 ## Releasing (maintainer)
 
-Releases are tags `vX.Y.Z` on `main`. Add a section `## X.Y · <date>` to `CHANGELOG.md` and bump `CFBundleShortVersionString` in `Info.plist` first. `./release.sh` builds a universal app, signs it with the Developer ID and has Apple notarize it, then writes `dist/Maben-Schema.dmg` and `.zip`. `./publish.sh` then tags the commit, creates the GitHub release with both files (notes from `CHANGELOG.md`) and rebuilds and deploys schema.maben.gg. Installed copies see the release within 6 hours and update themselves, so only publish what you would install yourself.
+One command, from an up-to-date checkout with everything that should go out in the working tree or on `main`:
+
+```sh
+./ship.sh --check        # shows the version, the notes and what will be committed; changes nothing
+./ship.sh                # the next patch version; or: ./ship.sh minor | major | X.Y.Z
+```
+
+It sets the version in `Info.plist` (`0.3.1` for fixes, `0.4` for features), turns `## Unreleased` in `CHANGELOG.md` into
+`## <version> · <date>`, runs the tests, opens the pull request and merges it when **Build and test** passes,
+runs `./release.sh` (universal build, Developer ID, Apple's notarization) and `./publish.sh` (tag `vX.Y.Z`,
+GitHub release with `Maben-Schema.dmg` and `Maben-Schema.zip`, schema.maben.gg), and at the end downloads the
+published zip and checks it the way an installed copy does. After a failure, fix the cause and run it again.
+
+It needs no passwords: Xcode's signed-in Apple account signs and notarizes, and `gh` is logged in. A published
+release can't be changed (releases are immutable), so a mistake is fixed with the next version.
+
+Installed copies see the release within 6 hours, verify the Developer ID signature and Apple's notarization,
+and update themselves, so only release what you would install yourself.
 
 ## Style
 

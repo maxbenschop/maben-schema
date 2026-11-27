@@ -275,6 +275,7 @@ struct SettingsView: View {
     // Version, the Update button and what the last check found (as in Maben Base, Awake and Sweep).
     private var updateTitle: String {
         if let r = updater.available { return "Version \(r.version) is available" }
+        if case .installed(let r) = updater.state { return "Version \(r.version) is installed" }
         return isBundled ? "Maben Schema \(updater.currentVersion)" : "Development copy"
     }
 
@@ -291,6 +292,7 @@ struct SettingsView: View {
         case .available: return updater.canInstall ? "Installs in a few seconds, then restarts with the same diagrams open." : "Move the app to Applications to update."
         case .downloading(_, let p): return "Downloading… \(Int(p * 100))%"
         case .installing: return "Installing. Maben Schema restarts in a moment."
+        case .installed: return "It opens the next time Maben Schema starts."
         case .failed(let message): return message
         }
     }
@@ -304,6 +306,8 @@ struct SettingsView: View {
             Button("Update") { updater.update() }.buttonStyle(.mbPrimary).disabled(!updater.canInstall)
         case .checking, .downloading, .installing:
             ProgressView().controlSize(.small)
+        case .installed:
+            Button("Restart") { updater.restart() }.buttonStyle(.mbPrimary)
         default:
             Button("Check now") { updater.check(userInitiated: true) }.buttonStyle(.mbQuiet).disabled(!isBundled)
         }
@@ -324,8 +328,8 @@ private struct ReleaseNotes: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Maben Schema \(release.version)").font(.system(size: 13, weight: .semibold))
             ScrollView {
-                Text((try? AttributedString(markdown: release.notes, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-                     ?? AttributedString(release.notes))
+                // Bold, code and links as they were written; a link only when it goes to an https address.
+                Text(ReleaseFeed.formatted(notes: release.notes))
                     .font(.system(size: 12))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

@@ -272,7 +272,9 @@ extension Diagram {
     public func ancestors(of domain: Domain) -> [Domain] {
         var out: [Domain] = []
         var next = domain.parent
-        while let id = next, let d = self.domain(id), !out.contains(where: { $0.id == d.id }), d.id != domain.id {
+        // A circle of parents ends where it closes.
+        var seen: Set<UUID> = [domain.id]
+        while let id = next, seen.insert(id).inserted, let d = self.domain(id) {
             out.append(d)
             next = d.parent
         }
@@ -322,6 +324,18 @@ extension Diagram {
                 }
                 if !indexNames.insert(index.name.lowercased()).inserted {
                     out.append(Problem(id: "dupeindex-\(index.id)", severity: .error, message: "\(label) has more than one index called \(index.name).", entity: e.id))
+                }
+            }
+            // A type or a default that the SQL can't take as it was typed is left out of it (see `SQLFragment`).
+            for a in e.attributes where !a.type.isEmpty || !a.defaultValue.isEmpty {
+                let column = SQLExport.column(a, in: self, dialect)
+                if !column.type.isEmpty, !SQLFragment.isType(column.type, dialect) {
+                    out.append(Problem(id: "badtype-\(a.id)", severity: .warning,
+                                       message: "\(label): the type of \(a.name) is left out of the SQL. A type is names, numbers and brackets on one line.", entity: e.id))
+                }
+                if !column.defaultValue.isEmpty, !SQLFragment.isDefault(SQLExport.defaultValue(column.defaultValue, dialect), dialect) {
+                    out.append(Problem(id: "baddefault-\(a.id)", severity: .warning,
+                                       message: "\(label): the default of \(a.name) is left out of the SQL. A default is one line, with its quotes and brackets closed.", entity: e.id))
                 }
             }
             let untyped = e.attributes.filter { $0.type.trimmingCharacters(in: .whitespaces).isEmpty }

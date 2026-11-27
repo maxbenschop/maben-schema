@@ -67,6 +67,8 @@ enum Script {
         do {
             var changed = try JSONDecoder().decode(Diagram.self, from: data)
             changed.version = Diagram.currentVersion
+            // A script can leave anything behind, as a file can.
+            changed.sanitize()
             changed.normalize()
             outcome.diagram = changed
         } catch {
