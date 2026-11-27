@@ -3,7 +3,7 @@
 Every release of Maben Schema. The newest version is at the top. `publish.sh` uses the section for the version it
 releases as the GitHub release notes, and schema.maben.gg/changelog is built from this file.
 
-## Unreleased
+## 0.3.1 · 27 November 2026
 
 - A diagram from someone else can no longer put a script into the SVG or the document you export from it: a picture that isn't a picture is left out, and what isn't a colour or a number isn't kept as one
 - An update is checked again as the copy that goes in, has to be notarized by Apple, and only ever comes from this app's own releases on GitHub. If an install fails the app is still there, and quitting waits for an install that is under way
