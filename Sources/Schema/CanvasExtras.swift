@@ -227,7 +227,7 @@ struct AnnotationInspector: View {
     }
 
     private static let sizes: [Double] = [0, 10, 14, 18, 24]
-    private static func sizeTitle(_ size: Double) -> String { size == 0 ? "Usual" : "\(Int(size))" }
+    private static func sizeTitle(_ size: Double) -> String { size == 0 ? "Usual" : "\(Safe.int(size))" }
     private var size: Binding<Double> {
         Binding(get: { annotation.size }, set: { v in set("Change Size") { $0.size = v } })
     }

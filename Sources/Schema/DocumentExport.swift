@@ -5,7 +5,10 @@ import SchemaCore
 /// with nothing outside it (the picture is SVG inside the page), so it can be mailed, put on a wiki or printed.
 enum DocumentExport {
     static func html(for d: Diagram, scene: Scene?, title: String) -> String {
+        // Every name, definition and note goes through one of these two: as text between tags (a new line is a
+        // line break), or as the value of an attribute. Nothing from the diagram is written as it is.
         func e(_ s: String) -> String { Workbook.escape(s).replacingOccurrences(of: "\n", with: "<br>") }
+        func attribute(_ s: String) -> String { Workbook.escape(s).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "'", with: "&#39;") }
         var out = "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>\(e(title))</title>\n<style>\n"
         out += "body{font:14px/1.5 -apple-system,BlinkMacSystemFont,'Inter','Segoe UI',system-ui,sans-serif;color:#111113;margin:40px auto;max-width:1100px;padding:0 24px}\n"
         out += "h1{font-size:28px;margin:0 0 4px}h2{font-size:19px;margin:36px 0 6px;padding-top:8px;border-top:1px solid #e3e3e8}p{margin:4px 0 10px;color:#45454d}\n"
@@ -28,7 +31,7 @@ enum DocumentExport {
         // Every entity under its own heading, with its attributes and indexes.
         let attributes = sheet("Attributes"), indexes = sheet("Indexes")
         for entity in d.entities {
-            out += "<h2 id=\"\(e(entity.tableName))\">\(e(entity.name))</h2>\n<p>Table <code>\(e(entity.tableName))</code>.\(entity.kind.isEmpty ? "" : " Kind: \(e(entity.kind)).") \(e(entity.definition))</p>\n"
+            out += "<h2 id=\"\(attribute(entity.tableName))\">\(e(entity.name))</h2>\n<p>Table <code>\(e(entity.tableName))</code>.\(entity.kind.isEmpty ? "" : " Kind: \(e(entity.kind)).") \(e(entity.definition))</p>\n"
             if let attributes {
                 let rows = [attributes.rows[0]] + attributes.rows.dropFirst().filter { $0.first == entity.name }
                 out += table(Workbook.Sheet(name: "", rows: rows), columns: [2, 3, 4, 5, 6, 7, 8, 9, 10, 14])

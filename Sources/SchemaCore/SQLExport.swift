@@ -14,6 +14,21 @@ public enum SQLExport {
     }
 
     public static func sections(for diagram: Diagram, dialect: Dialect? = nil, comments: Bool = true, options: SQLOptions? = nil, only: Set<UUID>? = nil) -> [Section] {
+        output(for: diagram, dialect: dialect, comments: comments, options: options, only: only).sections
+    }
+
+    /// The script in pieces, with what had to be left out of it.
+    public struct Output: Equatable {
+        public var sections: [Section]
+        /// Types and defaults that weren't written as they were typed, in words. Each is also in the script, as a
+        /// `-- skipped:` comment after the column it belongs to.
+        public var warnings: [String]
+
+        public var script: String { sections.map(\.text).joined(separator: "\n\n") + "\n" }
+    }
+
+    public static func output(for diagram: Diagram, dialect: Dialect? = nil, comments: Bool = true, options: SQLOptions? = nil, only: Set<UUID>? = nil) -> Output {
+        var warnings: [String] = []
         let dialect = dialect ?? diagram.dialect
         var options = options ?? diagram.sql
         if !comments { options.comments = .none }
@@ -41,12 +56,21 @@ public enum SQLExport {
         let guarded = options.ifNotExists && dialect != .sqlserver && dialect != .standard
 
         for table in tables {
-            var lines: [String] = []
+            // Each line of the table with the comment that goes after it, kept apart until the commas are in.
+            var lines: [(sql: String, comment: String)] = []
             let singleKey = table.key.count == 1 ? table.key[0] : nil
             let width = table.columns.map { q($0.name).count }.max() ?? 0
             for c in table.columns {
                 var parts = [q(c.name).padding(toLength: width, withPad: " ", startingAt: 0)]
                 var type = c.type.isEmpty ? defaultType(dialect) : c.type
+                // A type and a default are written as they were typed, so they have to be a type and a default:
+                // what could end the statement or turn the rest of it into a comment is left out, and said.
+                var skipped: [String] = []
+                if !SQLFragment.isType(type, dialect) {
+                    skipped.append("skipped: type " + SQLFragment.comment(type, limit: 400))
+                    warnings.append("\(table.name).\(c.name): the type was left out of the SQL. A type is names, numbers and brackets on one line.")
+                    type = defaultType(dialect)
+                }
                 var inlineKey = c.name == singleKey
                 var tail: [String] = []
                 if c.autoIncrement {
@@ -64,23 +88,30 @@ public enum SQLExport {
                 if inlineKey { parts.append("PRIMARY KEY") }
                 else if c.notNull && !(c.name == singleKey) { parts.append("NOT NULL") }
                 if c.unique && c.name != singleKey { parts.append("UNIQUE") }
-                if !c.defaultValue.isEmpty { parts.append("DEFAULT " + defaultValue(c.defaultValue, dialect)) }
-                var line = "    " + parts.joined(separator: " ").trimmingCharacters(in: .whitespaces)
-                if options.comments != .none, !c.comment.isEmpty { line += "\u{1}" + oneLine(c.comment) }
-                lines.append(line)
+                if !c.defaultValue.isEmpty {
+                    let value = defaultValue(c.defaultValue, dialect)
+                    if SQLFragment.isDefault(value, dialect) {
+                        parts.append("DEFAULT " + value)
+                    } else {
+                        skipped.append("skipped: default " + SQLFragment.comment(value, limit: 400))
+                        warnings.append("\(table.name).\(c.name): the default was left out of the SQL. A default is one line, with its quotes and brackets closed.")
+                    }
+                }
+                if options.comments != .none, !c.comment.isEmpty { skipped.append(SQLFragment.comment(c.comment)) }
+                lines.append(("    " + parts.joined(separator: " ").trimmingCharacters(in: .whitespaces), skipped.joined(separator: "  -- ")))
             }
             if table.key.count > 1 {
-                lines.append("    PRIMARY KEY (" + table.key.map { q($0) }.joined(separator: ", ") + ")")
+                lines.append(("    PRIMARY KEY (" + table.key.map { q($0) }.joined(separator: ", ") + ")", ""))
             }
             for unique in table.uniques {
-                lines.append("    CONSTRAINT \(q(unique.name)) UNIQUE (" + unique.columns.map { q($0) }.joined(separator: ", ") + ")")
+                lines.append(("    CONSTRAINT \(q(unique.name)) UNIQUE (" + unique.columns.map { q($0) }.joined(separator: ", ") + ")", ""))
             }
             for key in table.foreignKeys where options.foreignKeys != .none {
                 // A parent that comes later in the script (a circle of references) is added with ALTER TABLE at
                 // the end. SQLite can't do that, and doesn't need to: it accepts a table that doesn't exist yet.
                 let inside = dialect == .sqlite || (options.foreignKeys == .inTable && (created.contains(key.table) || key.table == table.name))
                 if inside {
-                    lines.append("    " + constraint(key, dialect, q))
+                    lines.append(("    " + constraint(key, dialect, q), ""))
                 } else {
                     later.append((table, key))
                 }
@@ -88,14 +119,15 @@ public enum SQLExport {
             // Commas after every line but the last; a comment goes after the comma.
             var body: [String] = []
             for (i, line) in lines.enumerated() {
-                let pieces = line.split(separator: "\u{1}", maxSplits: 1).map(String.init)
-                var text = pieces[0] + (i < lines.count - 1 ? "," : "")
-                if pieces.count > 1 { text += "  -- " + pieces[1] }
+                var text = line.sql + (i < lines.count - 1 ? "," : "")
+                if !line.comment.isEmpty { text += "  -- " + line.comment }
                 body.append(text)
             }
             var text = ""
             if options.comments != .none, !table.comment.isEmpty {
-                text += table.comment.split(separator: "\n").map { "-- " + $0 }.joined(separator: "\n") + "\n"
+                // Every kind of line end starts a new comment line: one that didn't would put the rest of the
+                // text into the script as SQL.
+                text += table.comment.split(whereSeparator: \.isNewline).map { "-- " + SQLFragment.comment(String($0)) }.joined(separator: "\n") + "\n"
             }
             text += "CREATE TABLE \(guarded ? "IF NOT EXISTS " : "")\(q(table.name)) (\n" + body.joined(separator: "\n") + "\n);"
             // Indexes that aren't unique come after their table; a unique one is a constraint inside it, so a
@@ -111,7 +143,7 @@ public enum SQLExport {
         for (table, key) in later {
             out.append(Section(entity: table.entity, text: "ALTER TABLE \(q(table.name)) ADD " + constraint(key, dialect, q) + ";"))
         }
-        return out
+        return Output(sections: out, warnings: warnings)
     }
 
     // MARK: Tables
@@ -157,15 +189,7 @@ public enum SQLExport {
             names.insert(name)
             return name
         }
-        func column(_ a: Attribute) -> Column {
-            // A domain brings its default and "required" along, where the attribute doesn't say itself.
-            let domain = d.domain(named: a.type)
-            let inherited = domain.map { [$0] + d.ancestors(of: $0) } ?? []
-            return Column(name: a.columnName, type: map(d.resolvedType(a.type), dialect), notNull: a.notNull || inherited.contains(where: \.notNull), unique: a.unique,
-                          autoIncrement: a.autoIncrement,
-                          defaultValue: a.defaultValue.isEmpty ? inherited.first { !$0.defaultValue.isEmpty }?.defaultValue ?? "" : a.defaultValue,
-                          comment: logicalComments ? (a.name == a.columnName ? "" : a.name) : a.definition)
-        }
+        func column(_ a: Attribute) -> Column { self.column(a, in: d, dialect, logicalComments: logicalComments) }
         var byID: [UUID: Entity] = [:]
         for e in d.entities { byID[e.id] = e }
         var incoming: [UUID: [Relationship]] = [:]
@@ -226,6 +250,17 @@ public enum SQLExport {
         return tables
     }
 
+    /// One attribute as the column it becomes.
+    static func column(_ a: Attribute, in d: Diagram, _ dialect: Dialect, logicalComments: Bool = false) -> Column {
+        // A domain brings its default and "required" along, where the attribute doesn't say itself.
+        let domain = d.domain(named: a.type)
+        let inherited = domain.map { [$0] + d.ancestors(of: $0) } ?? []
+        return Column(name: a.columnName, type: map(d.resolvedType(a.type), dialect), notNull: a.notNull || inherited.contains(where: \.notNull), unique: a.unique,
+                      autoIncrement: a.autoIncrement,
+                      defaultValue: a.defaultValue.isEmpty ? inherited.first { !$0.defaultValue.isEmpty }?.defaultValue ?? "" : a.defaultValue,
+                      comment: logicalComments ? (a.name == a.columnName ? "" : a.name) : a.definition)
+    }
+
     /// Parents before children, so every reference points at a table that already exists. Entities keep their
     /// order where they can.
     static func order(_ tables: [Table]) -> [Table] {
@@ -274,10 +309,6 @@ public enum SQLExport {
         if written(key.onDelete) { s += " ON DELETE " + key.onDelete.sql }
         if written(key.onUpdate) { s += " ON UPDATE " + key.onUpdate.sql }
         return s
-    }
-
-    static func oneLine(_ s: String) -> String {
-        s.split(whereSeparator: \.isNewline).joined(separator: " ")
     }
 
     static func defaultType(_ dialect: Dialect) -> String {

@@ -21,6 +21,12 @@ import SwiftUI
 //   --settings                  shows the Settings window too
 //   --verify-update <app> <version>   runs the updater's checks on an app and prints ACCEPTED or REJECTED
 //   --selftest                  runs the canvas's editing steps without a window on screen and prints the result
+//
+// The ones that read or write a file you name, run a script, or run the self-test (--snapshot, --export, --print,
+// --open, --from-sql, --from-sheet, --script, --compare, --inspect, --import-file, --import-sheet, --selftest)
+// are for building and testing the app, and only a debug build has them (`swift build`, `./build.sh demo`, CI).
+// The app people download knows --verify-update (see SECURITY.md), --bench (it times drawing and writes
+// nothing; CONTRIBUTING.md runs it on a release build), and the ones that only set how the window looks.
 
 enum Flags {
     static func value(_ name: String) -> String? {
@@ -28,7 +34,11 @@ enum Flags {
     }
     static func has(_ name: String) -> Bool { CommandLine.arguments.contains("--\(name)") }
     static var bench: Bool { has("bench") || value("bench") != nil }
+    #if DEBUG
     static var headless: Bool { value("snapshot") != nil || value("export") != nil || value("print") != nil || value("compare") != nil || value("script") != nil || value("inspect") != nil || has("selftest") || bench }
+    #else
+    static var headless: Bool { bench }
+    #endif
 }
 
 @MainActor
@@ -57,8 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // A waiting update installs now, so the next launch is the new version.
-        if Updater.shared.installOnQuit({ NSApp.reply(toApplicationShouldTerminate: true) }) { return .terminateLater }
+        // A waiting update installs now, so the next launch is the new version. And an install that is already
+        // replacing the app is waited for: quitting in the middle of it would leave half an app behind.
+        if Updater.shared.holdQuit({ NSApp.reply(toApplicationShouldTerminate: true) }) { return .terminateLater }
         return .terminateNow
     }
 
@@ -299,6 +310,7 @@ enum MainMenu {
 enum Headless {
     static func run() {
         var diagram = Flags.has("empty") ? Diagram() : Flags.has("features") ? Sample.features() : Sample.shop()
+        #if DEBUG
         if let path = Flags.value("open") {
             do { diagram = try Diagram.decode(Data(contentsOf: URL(fileURLWithPath: path))) } catch { fail("Couldn't open \(path): \(error.localizedDescription)") }
         }
@@ -366,6 +378,7 @@ enum Headless {
         if let path = Flags.value("inspect") { inspect(path) }
         if let path = Flags.value("print") { printed(diagram, to: path) }
         if let path = Flags.value("export") { export(diagram, to: path) }
+        #endif
         guard let doc = (NSDocumentController.shared as? SchemaDocumentController)?.openUntitled(with: diagram, display: false),
               let window = doc.windowControllers.first?.window else { fail("No window") }
         let size = (Flags.value("size") ?? "1360x860").split(separator: "x").compactMap { Double($0) }
@@ -376,8 +389,11 @@ enum Headless {
         window.orderBack(nil)
         applyFlags(to: doc.store)
         after(0.7) {
+            #if DEBUG
             if Flags.has("selftest") { SelfTest.run(doc.store); return }
+            #endif
             if Flags.bench { SelfTest.bench(doc.store, tables: Flags.value("bench").flatMap(Int.init) ?? 1000); return }
+            #if DEBUG
             doc.store.zoomToFit()
             // --edit=<entity>: with the line for a new attribute open, as while typing.
             if let name = Flags.value("edit"), let e = doc.store.diagram.entities.first(where: { $0.name.lowercased() == name.lowercased() }) {
@@ -400,6 +416,9 @@ enum Headless {
                 print("wrote \(path)")
                 exit(0)
             }
+            #else
+            exit(0)
+            #endif
         }
     }
 
@@ -422,8 +441,10 @@ enum Headless {
         if Flags.has("sql") { store.showSQL = true }
         if Flags.has("palette") { store.palette = true }
         if Flags.has("import") { store.sheet = .importSQL }
+        #if DEBUG
         if let path = Flags.value("import-file") { store.importFile(URL(fileURLWithPath: path)) }
         if let path = Flags.value("import-sheet") { store.sheetFile = URL(fileURLWithPath: path); store.sheet = .importSQL }
+        #endif
         if let name = Flags.value("select") {
             let ids = name.split(separator: ",").compactMap { n in store.diagram.entities.first { $0.name.lowercased() == n.lowercased() }?.id }
             if !ids.isEmpty { store.selection = .entities(Set(ids)) }
@@ -442,6 +463,7 @@ enum Headless {
         store.undoManager?.removeAllActions()
     }
 
+    #if DEBUG
     /// `--inspect=<file.sql>`: what an import of that file would find, in numbers.
     static func inspect(_ path: String) -> Never {
         let start = Date()
@@ -488,7 +510,11 @@ enum Headless {
                 try (Picture.data(shown, format: format, dark: dark, transparent: Flags.has("transparent"), scale: scale) ?? Data()).write(to: url)
             case "html": try DocumentExport.html(for: diagram, scene: scene, title: "Diagram").write(to: url, atomically: true, encoding: .utf8)
             // --print=<file.pdf> [--tiled]: what File › Print puts on paper, as a PDF.
-            case "sql": try SQLExport.script(for: diagram).write(to: url, atomically: true, encoding: .utf8)
+            case "sql":
+                let output = SQLExport.output(for: diagram)
+                // What was left out of the script (see `SQLFragment`) is said, not only written in it.
+                for warning in output.warnings { FileHandle.standardError.write(Data(("warning: " + warning + "\n").utf8)) }
+                try output.script.write(to: url, atomically: true, encoding: .utf8)
             case "md": try Report.markdown(for: diagram, title: "Diagram").write(to: url, atomically: true, encoding: .utf8)
             case "csv": try Report.csv(for: diagram).write(to: url, atomically: true, encoding: .utf8)
             case "xlsx": try Report.workbook(for: diagram).xlsx().write(to: url)
@@ -503,6 +529,7 @@ enum Headless {
         print("wrote \(path)")
         exit(0)
     }
+    #endif
 }
 
 Updater.verifyIfRequested()   // --verify-update <app> <version>: prints the result and exits

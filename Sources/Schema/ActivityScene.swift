@@ -390,10 +390,7 @@ struct ActivityScene: Drawing {
             appearance.performAsCurrentDrawingAppearance { out = color.usingColorSpace(.sRGB) ?? color }
             return out
         }
-        func n(_ v: CGFloat) -> String {
-            let r = (Double(v) * 100).rounded() / 100
-            return r == r.rounded() ? String(Int(r)) : String(r)
-        }
+        func n(_ v: CGFloat) -> String { Safe.decimal(Double(v)) }
         func paint(_ attribute: String, _ color: NSColor?) -> String {
             guard let color else { return "\(attribute)=\"none\"" }
             let c = resolved(color)

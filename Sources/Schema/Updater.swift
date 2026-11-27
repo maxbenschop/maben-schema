@@ -12,19 +12,23 @@ let isBundled = Bundle.main.bundleURL.pathExtension == "app"
 ///    Its tag `vX.Y.Z` is the version and its text the release notes. At start, every 6 hours, after
 ///    waking if the last check is over 6 hours old, and when you press Check now. This is the only
 ///    network request the app makes.
-/// 2. Download `Maben-Schema.zip` from that release to a temporary folder.
+/// 2. Download `Maben-Schema.zip` from that release (and from nowhere but this repository's releases on
+///    github.com) to a temporary folder.
 /// 3. Verify before touching anything: the app inside must be signed with the Developer ID of team
 ///    NJTYRVLSA8 with this bundle ID, notarized by Apple (Gatekeeper accepts it), and the announced version.
-/// 4. Install: the old app goes to the Trash, the new one takes its place, and it restarts.
+/// 4. Install: a copy is put next to the app and checked once more (what is checked is what is installed),
+///    then the two change places and the old one goes to the Trash. See `UpdateInstall`.
 ///
 /// An automatic install never restarts the app under your hands: it waits until no diagram is open
 /// (an untouched empty window doesn't count), or runs as you quit (then the new version is simply there
-/// next time).
+/// next time). That is looked at again right before the app is replaced and right before it restarts, so a
+/// diagram started while the update was coming in isn't lost either.
 @MainActor
 final class Updater: ObservableObject {
     static let shared = Updater()
 
     typealias Release = ReleaseFeed.Release
+    typealias Failure = UpdateInstall.Failure
 
     enum State: Equatable {
         case idle
@@ -33,6 +37,8 @@ final class Updater: ObservableObject {
         case available(Release)
         case downloading(Release, progress: Double)
         case installing(Release)
+        /// The new version is in the app's place; this one runs on until it is quit or restarted.
+        case installed(Release)
         case failed(String)
     }
 
@@ -40,17 +46,37 @@ final class Updater: ObservableObject {
     @Published var autoCheck: Bool { didSet { defaults.set(autoCheck, forKey: "updates.autoCheck"); schedule() } }
     @Published var autoInstall: Bool { didSet { defaults.set(autoInstall, forKey: "updates.autoInstall") } }
 
-    nonisolated static let teamID = "NJTYRVLSA8"
-    nonisolated static let bundleID = "gg.maben.schema"
+    nonisolated static let teamID = UpdateInstall.teamID
+    nonisolated static let bundleID = UpdateInstall.bundleID
+
+    /// Why an install runs, which decides whether the app may restart at the end of it.
+    private enum Reason {
+        /// By itself: only while no diagram is open.
+        case automatic
+        /// The Update button: saved diagrams come back, and the unsaved ones were asked about.
+        case button
+        /// As the app quits: nothing restarts.
+        case quit
+    }
 
     private let defaults = UserDefaults.standard
     private var timer: Timer?
     private var lastCheck: Date?
     private var wakeObserver: NSObjectProtocol?
     private var downloadObservation: NSKeyValueObservation?
-    /// Set while an update installs as the app quits: called when it is done, whatever the outcome.
+    private var download: URLSessionDownloadTask?
+    /// Set while the app waits to quit for an install: called when it is done, whatever the outcome.
     private var afterInstall: (() -> Void)?
     private var quitting = false
+    private var reason = Reason.automatic
+    /// The never-saved diagrams that were there when you chose "Update anyway".
+    private var accepted: Set<ObjectIdentifier> = []
+    /// A downloaded and checked update that waits for its moment: no diagram open, the button, or quitting.
+    private var staged: (release: Release, app: URL, work: URL)?
+    /// True from just before the app is replaced until that is done. Nothing stops the app in between.
+    private var swapping = false
+    /// Goes up when an install is given up, so what is still on its way in is dropped when it arrives.
+    private var attempt = 0
 
     var currentVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
 
@@ -80,6 +106,11 @@ final class Updater: ObservableObject {
     /// Call once at launch. Does nothing for a copy that isn't a real app (`swift run`, tests, demo).
     func start() {
         guard live else { return }
+        if canInstall {
+            // What an install that was cut short left next to the app.
+            let app = Bundle.main.bundleURL
+            DispatchQueue.global(qos: .utility).async { UpdateInstall.cleanUp(beside: app) }
+        }
         schedule()
         if autoCheck {
             DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.check(userInitiated: false) }
@@ -110,7 +141,7 @@ final class Updater: ObservableObject {
 
     func check(userInitiated: Bool) {
         switch state {
-        case .checking, .downloading, .installing: return
+        case .checking, .downloading, .installing, .installed: return
         default: break
         }
         state = .checking
@@ -146,14 +177,26 @@ final class Updater: ObservableObject {
     /// The open diagrams, without the untouched empty window the app starts with.
     private var openDiagrams: [SchemaDocument] {
         NSDocumentController.shared.documents.compactMap { $0 as? SchemaDocument }
-            .filter { $0.fileURL != nil || $0.isDocumentEdited || !$0.store.diagram.entities.isEmpty }
+            .filter { $0.fileURL != nil || $0.isDocumentEdited || !$0.store.diagram.entities.isEmpty || !$0.store.diagram.activities.isEmpty }
+    }
+
+    /// The open diagrams that have no file to come back from after a restart.
+    private var unsavedDiagrams: [SchemaDocument] { openDiagrams.filter { $0.fileURL == nil } }
+
+    /// Whether the app may be replaced and restarted now, for the reason this install runs.
+    private var mayRestart: Bool {
+        switch reason {
+        case .automatic: openDiagrams.isEmpty
+        case .button: unsavedDiagrams.allSatisfy { accepted.contains(ObjectIdentifier($0)) }
+        case .quit: true
+        }
     }
 
     /// Automatic install: only while no diagram is open, so nothing you are looking at is lost.
     private func installWhenQuiet() {
         guard canInstall else { return }
         if openDiagrams.isEmpty {
-            install()
+            install(.automatic)
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in
                 guard let self, case .available = self.state, self.autoInstall else { return }
@@ -162,38 +205,87 @@ final class Updater: ObservableObject {
         }
     }
 
-    /// As the app quits: installs a waiting update without restarting, then calls `done`.
-    /// Returns false (and does nothing) when there is no update to install automatically.
-    func installOnQuit(_ done: @escaping () -> Void) -> Bool {
-        guard autoInstall, canInstall, case .available = state else { return false }
-        afterInstall = done
+    /// As the app quits. An install that is replacing the app is waited for, however long it takes; one that is
+    /// still coming in gets 45 seconds and is then given up, before anything of the app was touched; a waiting
+    /// update is installed now, without restarting. Returns false when there is nothing to wait for; otherwise
+    /// `done` is called when the app can quit.
+    func holdQuit(_ done: @escaping @MainActor @Sendable () -> Void) -> Bool {
+        let busy: Bool
+        switch state {
+        case .downloading, .installing: busy = true
+        default: busy = false
+        }
+        var waiting = false
+        if case .available = state { waiting = canInstall && (autoInstall || staged != nil) }
+        guard swapping || busy || waiting else { return false }
+        // Never from inside this call: the app is told it may quit only after it was told to wait.
+        afterInstall = { Task { @MainActor in done() } }
         quitting = true
-        // Never keep the app from quitting: give up after 45 seconds.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in self?.finished() }
-        install()
+        if !swapping {
+            reason = .quit
+            // Never keep the app from quitting for a download: give up after 45 seconds. Not once the app is
+            // being replaced: that is seconds of work, and stopping halfway is the one thing that must not happen.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in self?.giveUp() }
+            if !busy { install(.quit) }
+        }
         return true
+    }
+
+    /// Drops an install that hasn't started replacing the app yet, and lets a waiting quit go on.
+    private func giveUp() {
+        guard !swapping else { return }
+        attempt += 1
+        download?.cancel()
+        download = nil
+        if case .downloading(let r, _) = state { state = .available(r) }
+        if case .installing(let r) = state { state = .available(r) }
+        finished()
     }
 
     /// The Update button. Saved diagrams are saved once more and come back after the restart. A diagram that
     /// has never been saved has no file to come back from, so it asks first when there is one.
     func update() {
-        let unsaved = openDiagrams.filter { $0.fileURL == nil }
-        if !unsaved.isEmpty {
-            let alert = NSAlert()
-            alert.messageText = unsaved.count == 1 ? "Update with an unsaved diagram?" : "Update with \(unsaved.count) unsaved diagrams?"
-            alert.informativeText = "Maben Schema restarts to update. \(unsaved.map(\.displayName).joined(separator: ", ")) \(unsaved.count == 1 ? "has" : "have") never been saved and would be lost. Save first (⌘S), or update anyway."
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Update anyway").hasDestructiveAction = true
-            guard alert.runModal() == .alertSecondButtonReturn else { return }
-        }
-        install()
+        guard confirmLosingUnsaved() else { return }
+        install(.button)
     }
 
-    /// Downloads, verifies and swaps the app, then restarts (or lets a waiting quit go on).
-    private func install() {
-        guard let release = available, canInstall else { return }
+    /// The Restart button, when the new version is in place and this one is still running.
+    func restart() {
+        guard case .installed = state, confirmLosingUnsaved() else { return }
+        relaunch()
+    }
+
+    private func confirmLosingUnsaved() -> Bool {
+        let unsaved = unsavedDiagrams
+        accepted = Set(unsaved.map { ObjectIdentifier($0) })
+        guard !unsaved.isEmpty else { return true }
+        let alert = NSAlert()
+        alert.messageText = unsaved.count == 1 ? "Update with an unsaved diagram?" : "Update with \(unsaved.count) unsaved diagrams?"
+        alert.informativeText = "Maben Schema restarts to update. \(unsaved.map(\.displayName).joined(separator: ", ")) \(unsaved.count == 1 ? "has" : "have") never been saved and would be lost. Save first (⌘S), or update anyway."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Update anyway").hasDestructiveAction = true
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    /// Downloads and checks the update (unless one is waiting, checked already), then puts it in place.
+    private func install(_ why: Reason) {
+        guard let release = available, canInstall else { finished(); return }
         if case .downloading = state { return }
         if case .installing = state { return }
+        reason = why
+        if let staged, staged.release == release, FileManager.default.fileExists(atPath: staged.app.path) {
+            place()
+            return
+        }
+        dropStaged()
+        // The feed was checked when it was read; the address is looked at once more where it is used.
+        guard ReleaseFeed.isDownload(release.zip) else {
+            state = .failed("The update isn’t on GitHub where it should be. It was not installed.")
+            finished()
+            return
+        }
+        attempt += 1
+        let mine = attempt
         state = .downloading(release, progress: 0)
         let task = URLSession.shared.downloadTask(with: release.zip) { location, response, error in
             // The temporary file is deleted when this returns, so move it first.
@@ -204,13 +296,19 @@ final class Updater: ObservableObject {
             }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             Task { @MainActor in
+                guard mine == self.attempt else {
+                    if let kept { try? FileManager.default.removeItem(at: kept) }
+                    return
+                }
+                self.download = nil
                 guard let kept, error == nil, status == 200 else {
+                    if let kept { try? FileManager.default.removeItem(at: kept) }
                     self.state = .failed("The download failed\(error.map { ": \($0.localizedDescription)" } ?? " (HTTP \(status)).")")
                     self.finished()
                     return
                 }
                 self.state = .installing(release)
-                Task.detached { await self.finish(zip: kept, release: release) }
+                Task.detached { await self.prepare(zip: kept, release: release, attempt: mine) }
             }
         }
         downloadObservation = task.progress.observe(\.fractionCompleted) { progress, _ in
@@ -219,11 +317,13 @@ final class Updater: ObservableObject {
                 if case .downloading(let r, _) = self.state { self.state = .downloading(r, progress: value) }
             }
         }
+        download = task
         task.resume()
     }
 
-    /// Unpacks, verifies and swaps the app. Runs off the main thread.
-    private nonisolated func finish(zip: URL, release: Release) async {
+    /// Unpacks the download and checks the app in it. Runs off the main thread. A bad update stops here, before
+    /// anything of the app is touched and before anyone is asked for a password.
+    private nonisolated func prepare(zip: URL, release: Release, attempt mine: Int) async {
         let fm = FileManager.default
         let work = fm.temporaryDirectory.appendingPathComponent("MabenSchemaUpdate-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: zip) }
@@ -233,20 +333,72 @@ final class Updater: ObservableObject {
             guard let newApp = try fm.contentsOfDirectory(at: work, includingPropertiesForKeys: nil).first(where: { $0.pathExtension == "app" })
             else { throw Failure("The update doesn't contain an app.") }
             try Self.verify(newApp, expectedVersion: release.version)
-            let target = await MainActor.run { Bundle.main.bundleURL }
-            try Self.replace(target, with: newApp)
-            try? fm.removeItem(at: work)
             await MainActor.run {
-                if self.quitting { self.finished() } else { self.relaunch() }
+                guard mine == self.attempt else { try? FileManager.default.removeItem(at: work); return }
+                self.staged = (release, newApp, work)
+                self.place()
             }
         } catch {
             try? fm.removeItem(at: work)
             let message = (error as? Failure)?.message ?? error.localizedDescription
             await MainActor.run {
+                guard mine == self.attempt else { return }
                 self.state = .failed(message)
                 self.finished()
             }
         }
+    }
+
+    /// Puts the waiting, checked update in the app's place, if this is still the moment for it.
+    private func place() {
+        guard let staged, !swapping else { return }
+        // Looked at again here, not only when the download started: a diagram may have been opened since.
+        guard mayRestart else {
+            state = .available(staged.release)
+            let asked = reason == .button
+            finished()
+            // The button: ask about the new unsaved diagram. By itself: wait until none is open, or for the quit.
+            if asked { update() } else if autoInstall { installWhenQuiet() }
+            return
+        }
+        swapping = true
+        state = .installing(staged.release)
+        let target = Bundle.main.bundleURL, app = staged.app, version = staged.release.version
+        Task.detached {
+            let failure: String?
+            do {
+                try Self.replace(target, with: app, version: version)
+                failure = nil
+            } catch {
+                failure = (error as? Failure)?.message ?? error.localizedDescription
+            }
+            await MainActor.run { self.placed(failure) }
+        }
+    }
+
+    private func placed(_ failure: String?) {
+        swapping = false
+        let release = staged?.release
+        dropStaged()
+        if let failure {
+            state = .failed(failure)
+            finished()
+            return
+        }
+        guard let release else { finished(); return }
+        // And once more before restarting: replacing the app can take a while (a password is asked for when the
+        // app was installed by an administrator), and the new version is just as much there without a restart.
+        if quitting || !mayRestart {
+            state = .installed(release)
+            finished()
+        } else {
+            relaunch()
+        }
+    }
+
+    private func dropStaged() {
+        if let staged { try? FileManager.default.removeItem(at: staged.work) }
+        staged = nil
     }
 
     /// Lets a waiting quit go on (once).
@@ -256,17 +408,14 @@ final class Updater: ObservableObject {
         done?()
     }
 
-    struct Failure: Error { let message: String; init(_ m: String) { message = m } }
-
     /// The downloaded app must be ours, notarized, and the version we expect.
     nonisolated static func verify(_ app: URL, expectedVersion: String) throws {
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(app as CFURL, [], &code) == errSecSuccess, let code else {
             throw Failure("The update isn't a valid app.")
         }
-        let text = "anchor apple generic and identifier \"\(bundleID)\" and certificate leaf[subject.OU] = \"\(teamID)\""
         var requirement: SecRequirement?
-        guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess, let requirement else {
+        guard SecRequirementCreateWithString(UpdateInstall.requirement() as CFString, [], &requirement) == errSecSuccess, let requirement else {
             throw Failure("Couldn't check the update's signature.")
         }
         let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate | kSecCSCheckNestedCode)
@@ -282,25 +431,24 @@ final class Updater: ObservableObject {
         }
     }
 
-    /// Swaps the app bundle. The old copy goes to the Trash, so it can be restored by hand.
-    nonisolated static func replace(_ target: URL, with newApp: URL) throws {
+    /// Swaps the app bundle (see `UpdateInstall`). The copy that goes in is checked where it will be installed
+    /// from: by this app when it can write to the folder, by the administrator's command when it can't.
+    nonisolated static func replace(_ target: URL, with newApp: URL, version: String) throws {
         let fm = FileManager.default
-        if fm.isWritableFile(atPath: target.deletingLastPathComponent().path) && fm.isWritableFile(atPath: target.path) {
-            var trashed: NSURL?
-            try fm.trashItem(at: target, resultingItemURL: &trashed)
-            do {
-                try fm.copyItem(at: newApp, to: target)
-            } catch {
-                if let trashed { try? fm.moveItem(at: trashed as URL, to: target) }   // put the old one back
-                throw Failure("Couldn't install the update: \(error.localizedDescription)")
-            }
+        let folder = target.deletingLastPathComponent()
+        if fm.isWritableFile(atPath: folder.path) && fm.isWritableFile(atPath: target.path) {
+            try UpdateInstall.swap(target: target, with: newApp, verify: { try verify($0, expectedVersion: version) })
         } else {
             // Installed by an administrator: ask for the password once.
-            let q = { (s: String) in "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-            let staged = target.deletingLastPathComponent().appendingPathComponent(".Maben Schema.update.app").path
-            let command = "/bin/rm -rf \(q(staged)) && /usr/bin/ditto \(q(newApp.path)) \(q(staged)) && /bin/rm -rf \(q(target.path)) && /bin/mv \(q(staged)) \(q(target.path))"
-            let script = "do shell script \"\(command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\" with prompt \"Maben Schema wants to install an update.\" with administrator privileges"
-            guard run("/usr/bin/osascript", ["-e", script]) == 0 else { throw Failure("The update was not installed (no administrator password).") }
+            let staging = folder.appendingPathComponent(UpdateInstall.stagingPrefix + UUID().uuidString).path
+            let command = UpdateInstall.rootCommand(newApp: newApp.path, target: target.path, staging: staging,
+                                                    requirement: UpdateInstall.requirement(), version: version)
+            let script = UpdateInstall.appleScript(running: command, prompt: "Maben Schema wants to install an update.")
+            let (status, said) = runAndListen("/usr/bin/osascript", ["-e", script])
+            guard status == 0 else {
+                // -128: the password wasn't given.
+                throw Failure(said.contains("-128") ? "The update was not installed (no administrator password)." : "The update couldn’t be installed. The app is as it was.")
+            }
         }
     }
 
@@ -330,6 +478,20 @@ final class Updater: ObservableObject {
         do { try p.run() } catch { return -1 }
         p.waitUntilExit()
         return p.terminationStatus
+    }
+
+    /// The same, with what the tool said when it failed.
+    nonisolated static func runAndListen(_ tool: String, _ args: [String]) -> (status: Int32, said: String) {
+        let p = Process()
+        let pipe = Pipe()
+        p.executableURL = URL(fileURLWithPath: tool)
+        p.arguments = args
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = pipe
+        do { try p.run() } catch { return (-1, "") }
+        let said = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return (p.terminationStatus, String(decoding: said, as: UTF8.self))
     }
 
     /// `Schema --verify-update <app> <version>`: runs the updater's checks on an app and prints the result.

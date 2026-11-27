@@ -705,7 +705,7 @@ final class AstaBuilder {
             } else {
                 end(parent, r.name, r.parentOptional ? 0 : 1, 1)
                 let range = r.childRange
-                end(child, r.childName, Int32(range.lower), range.upper.map { Int32($0) } ?? -1)
+                end(child, r.childName, Int32(clamping: range.lower), range.upper.map { Int32(clamping: $0) } ?? -1)
                 // A foreign key that copies a unique index of the parent points at that index.
                 if let id = r.parentIndex, let index = indexObjects[id] {
                     relationship["erIndex"] = .object(index)
@@ -968,7 +968,7 @@ final class AstaBuilder {
                 text["text"] = .string(a.text)
                 var look = [("fill.color.alpha", "FF"), ("fill.color", "#FFFFCC")]
                 if !a.style.text.isEmpty { look.append(("font.color", a.style.text.uppercased())) }
-                if a.size > 0 { look.append(("font.size", "\(Int(a.size))")) }
+                if a.size > 0 { look.append(("font.size", "\(Safe.int(a.size, in: 1...Int(Geometry.largestText)))")) }
                 text["styleMap"] = map(look)
             case .line, .arrow:
                 guard a.points.count >= 2 else { continue }

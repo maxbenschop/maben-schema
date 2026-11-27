@@ -130,10 +130,12 @@ public enum SQLImport {
                 groups[g].entities.append(e.id)
             }
             e.definition = t.comment
+            // Looked up, not searched for per column: a table can have a great many of both.
+            let keyNames = Set(t.key.map { $0.lowercased() })
             for c in t.columns {
                 var a = Attribute(name: c.name, type: c.type)
                 if Naming.physical(c.name) != c.name { a.physicalName = c.name }
-                a.isPrimaryKey = t.key.contains { $0.lowercased() == c.name.lowercased() }
+                a.isPrimaryKey = keyNames.contains(c.name.lowercased())
                 a.notNull = c.notNull || a.isPrimaryKey
                 a.unique = c.unique
                 a.autoIncrement = c.autoIncrement

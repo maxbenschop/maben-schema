@@ -20,9 +20,21 @@ public struct Workbook: Equatable {
 
     public enum WorkbookError: LocalizedError {
         case notAWorkbook
+        /// It is a workbook, but one that asks for more than a sheet can hold: a cell in a column that doesn't
+        /// exist, more cells than fit in memory, or files inside it that unpack to far more than they are.
+        case unreadable
 
-        public var errorDescription: String? { "This isn’t an Excel workbook (.xlsx) that can be read." }
+        public var errorDescription: String? {
+            switch self {
+            case .notAWorkbook: "This isn’t an Excel workbook (.xlsx) that can be read."
+            case .unreadable: "This file couldn’t be read."
+            }
+        }
     }
+
+    /// What Excel itself stops at, and how many cells are read in all (a row is filled up to its last cell, so a
+    /// few cells far to the right in many rows would otherwise ask for more memory than there is).
+    static let mostColumns = 16_384, mostRows = 1_048_576, mostCells = 4_000_000
 
     // MARK: Writing
 
@@ -114,6 +126,7 @@ public struct Workbook: Equatable {
             case "\"": out += "&quot;"
             // What XML has no way to write is left out.
             case _ where ch.value < 32 && ch != "\n" && ch != "\t" && ch != "\r": break
+            case "\u{FFFE}", "\u{FFFF}": break
             default: out.unicodeScalars.append(ch)
             }
         }
@@ -123,34 +136,56 @@ public struct Workbook: Equatable {
     // MARK: Reading
 
     /// Reads an .xlsx file: every sheet, as rows of text (a number is read as it is written in the file).
-    public init(xlsx data: Data) throws {
-        guard let entries = try? Zip.entries(of: data) else { throw WorkbookError.notAWorkbook }
+    /// The file can come from anywhere, so nothing in it is taken at its word: see `Zip.Limits` and the limits above.
+    public init(xlsx data: Data) throws { try self.init(xlsx: data, limits: Zip.Limits()) }
+
+    /// `limits`: how much is unpacked. A test passes smaller ones.
+    init(xlsx data: Data, limits: Zip.Limits) throws {
+        let entries: [Zip.Entry]
+        do {
+            // Only the workbook's own parts are unpacked; pictures and the rest are stepped over.
+            entries = try Zip.entries(of: data, limits: limits) { $0.hasPrefix("xl/") && ($0.hasSuffix(".xml") || $0.hasSuffix(".rels")) }
+        } catch Zip.ZipError.tooLarge {
+            throw WorkbookError.unreadable
+        } catch {
+            throw WorkbookError.notAWorkbook
+        }
         var files: [String: Data] = [:]
-        for e in entries { files[e.name] = Data(e.data) }
+        for e in entries where files[e.name] == nil { files[e.name] = Data(e.data) }
         guard let book = files["xl/workbook.xml"] else { throw WorkbookError.notAWorkbook }
-        let listing = XMLElements(book)
+        // A part that holds more than can be read (see `XMLElements`) makes the whole file one that can't be:
+        // half a workbook would come in as if it were all of it.
+        func elements(_ part: Data) throws -> XMLElements {
+            let read = XMLElements(part)
+            guard !read.cutShort else { throw WorkbookError.unreadable }
+            return read
+        }
+        let listing = try elements(book)
         var targets: [String: String] = [:]
         if let rels = files["xl/_rels/workbook.xml.rels"] {
-            for r in XMLElements(rels).all("Relationship") { targets[r.attributes["Id"] ?? ""] = r.attributes["Target"] ?? "" }
+            for r in try elements(rels).all("Relationship") { targets[r.attributes["Id"] ?? ""] = r.attributes["Target"] ?? "" }
         }
         var shared: [String] = []
         if let strings = files["xl/sharedStrings.xml"] {
-            shared = XMLElements(strings).all("si").map { $0.text(of: "t") }
+            shared = try elements(strings).all("si").map { $0.text(of: "t") }
         }
         var out: [Sheet] = []
+        var cellsRead = 0
         for (i, sheet) in listing.all("sheet").enumerated() {
             let id = sheet.attributes["r:id"] ?? sheet.attributes["id"] ?? ""
             var path = targets[id] ?? "worksheets/sheet\(i + 1).xml"
             path = path.hasPrefix("/") ? String(path.dropFirst()) : "xl/" + path
             guard let xml = files[path] else { continue }
             var rows: [[String]] = []
-            for row in XMLElements(xml).all("row") {
+            for row in try elements(xml).all("row") {
+                guard rows.count < Self.mostRows else { throw WorkbookError.unreadable }
                 var cells: [String] = []
                 for c in row.children where c.name == "c" {
                     // The cell says where it is (B7); empty cells before it aren't in the file.
-                    let letters = (c.attributes["r"] ?? "").prefix { $0.isLetter }
                     var at = cells.count
-                    if !letters.isEmpty { at = letters.uppercased().unicodeScalars.reduce(0) { $0 * 26 + Int($1.value) - 64 } - 1 }
+                    if let reference = c.attributes["r"], let column = try Self.columnIndex(of: reference) { at = column }
+                    guard at < Self.mostColumns, cellsRead + max(at + 1 - cells.count, 0) <= Self.mostCells else { throw WorkbookError.unreadable }
+                    cellsRead += max(at + 1 - cells.count, 0)
                     while cells.count < at { cells.append("") }
                     var value = c.text(of: "v")
                     switch c.attributes["t"] ?? "" {
@@ -166,6 +201,27 @@ public struct Workbook: Equatable {
         }
         guard !out.isEmpty else { throw WorkbookError.notAWorkbook }
         sheets = out
+    }
+
+    /// The column a cell reference names, counted from 0: `B7` is 1. Nil when it names none (a reference without
+    /// letters). Throws for letters that aren't a column Excel has: more than three, past XFD, or not A to Z.
+    static func columnIndex(of reference: String) throws -> Int? {
+        var index = 0, letters = 0
+        for scalar in reference.unicodeScalars {
+            guard scalar.properties.isAlphabetic else { break }
+            let value: Int
+            switch scalar.value {
+            case 65...90: value = Int(scalar.value) - 64
+            case 97...122: value = Int(scalar.value) - 96
+            default: throw WorkbookError.unreadable
+            }
+            letters += 1
+            guard letters <= 3 else { throw WorkbookError.unreadable }
+            index = index * 26 + value
+        }
+        guard letters > 0 else { return nil }
+        guard index <= mostColumns else { throw WorkbookError.unreadable }
+        return index - 1
     }
 
     /// Reads CSV text as one sheet. Fields in quotes can hold commas, quotes (written twice) and new lines;
@@ -216,24 +272,44 @@ final class XMLElements: NSObject, XMLParserDelegate {
         /// The text of every element of that name under this one, joined (a cell's text can come in runs).
         func text(of name: String) -> String {
             var out = ""
-            var open = children
-            while !open.isEmpty {
-                let e = open.removeFirst()
+            // The next one to look at is the last in the list, so each is taken and put there once.
+            var open = Array(children.reversed())
+            while let e = open.popLast() {
                 if e.name == name { out += e.content }
-                open.insert(contentsOf: e.children, at: 0)
+                open.append(contentsOf: e.children.reversed())
             }
             return out
         }
     }
 
+    /// How deep elements may sit in each other. A workbook's go a handful deep.
+    static let deepest = 64
+    /// How many elements one part may have. Each takes far more room in memory than in the file (four bytes of
+    /// `<c/>` each, packed a thousand times smaller still), so a small file could otherwise ask for gigabytes.
+    /// A sheet with a row per attribute stays far below this.
+    static let mostElements = 4_000_000
+
+    /// True when reading stopped at one of the limits here: what was read is then not all there is.
+    private(set) var cutShort = false
+    private var count = 0
+    private let most: Int
+
     private let root = Element(name: "", attributes: [:])
     private var stack: [Element] = []
+    /// How much text may still come. Text is never longer than the file it is in, unless the file defines words
+    /// that stand for more words that stand for more words; reading stops when it gets there.
+    private var room = 0
 
-    init(_ data: Data) {
+    /// `mostElements`: a test passes a smaller number.
+    init(_ data: Data, mostElements: Int = XMLElements.mostElements) {
+        most = mostElements
         super.init()
         stack = [root]
+        room = data.count + 4096
         let parser = XMLParser(data: data)
         parser.delegate = self
+        // Nothing is fetched from outside the file.
+        parser.shouldResolveExternalEntities = false
         parser.parse()
     }
 
@@ -241,26 +317,37 @@ final class XMLElements: NSObject, XMLParserDelegate {
     func all(_ name: String) -> [Element] {
         var out: [Element] = []
         var open = [root]
-        while !open.isEmpty {
-            let e = open.removeFirst()
+        while let e = open.popLast() {
             if e.name == name { out.append(e) }
-            open.insert(contentsOf: e.children, at: 0)
+            open.append(contentsOf: e.children.reversed())
         }
         return out
     }
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String] = [:]) {
         // "x:row" and "row" are the same thing here.
+        guard !cutShort else { return }
+        count += 1
+        // Deeper than any workbook goes, or more than any holds: stop reading, and say so.
+        guard stack.count <= Self.deepest, count <= most else { stop(parser); return }
         let e = Element(name: elementName.split(separator: ":").last.map(String.init) ?? elementName, attributes: attributes)
         stack.last?.children.append(e)
         stack.append(e)
     }
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName: String?) {
-        if stack.count > 1 { stack.removeLast() }
+        if stack.count > 1, !cutShort { stack.removeLast() }
+    }
+
+    private func stop(_ parser: XMLParser) {
+        cutShort = true
+        parser.abortParsing()
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
+        guard !cutShort else { return }
+        room -= string.utf8.count
+        guard room >= 0 else { stop(parser); return }
         stack.last?.content += string
     }
 }

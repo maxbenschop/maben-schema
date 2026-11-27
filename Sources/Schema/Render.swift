@@ -163,7 +163,8 @@ enum Renderer {
             ctx.strokePath()
         case .image:
             var picture = pictures[a.image.isEmpty ? "" : "\(a.id)\(a.image.count)"]
-            if picture == nil, let data = Data(base64Encoded: a.image), let made = NSImage(data: data) {
+            // Only what starts as a picture is handed on to be read as one (see `EmbeddedImage`).
+            if picture == nil, let data = EmbeddedImage(base64: a.image)?.data, let made = NSImage(data: data) {
                 if pictures.count > 40 { pictures.removeAll() }
                 pictures["\(a.id)\(a.image.count)"] = made
                 picture = made
@@ -696,7 +697,9 @@ enum Picture {
         let view = View(scene: scene, transparent: transparent)
         view.appearance = appearance(dark: dark)
         let size = view.bounds.size
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int((size.width * scale).rounded()), pixelsHigh: Int((size.height * scale).rounded()),
+        // A diagram too large for a picture this fine gets a coarser one: never a number of dots that can't be.
+        guard let dots = Safe.pixels(width: Double(size.width), height: Double(size.height), scale: Double(scale)),
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: dots.wide, pixelsHigh: dots.high,
                                          bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
               let context = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
         // Sized in points, so it pastes at the size it has on the canvas, and the drawing is scaled to the dots.
@@ -741,8 +744,9 @@ enum Picture {
                 columns = 1; rows = 1
             } else {
                 scale = 1
-                columns = max(1, Int(ceil(area.width / page.width)))
-                rows = max(1, Int(ceil(area.height / page.height)))
+                // At most 200 pages each way: a diagram that asks for more is one no printer should start on.
+                columns = Safe.int(Double(ceil(area.width / page.width)), in: 1...200)
+                rows = Safe.int(Double(ceil(area.height / page.height)), in: 1...200)
             }
             setFrameSize(NSSize(width: page.width * CGFloat(columns), height: page.height * CGFloat(rows)))
         }

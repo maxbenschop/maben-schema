@@ -10,12 +10,13 @@ public enum Report {
             for domain in d.domains { out += "| \(cell(domain.name)) | \(cell(domain.type)) | \(cell(domain.definition)) |\n" }
         }
         for e in d.entities {
-            out += "\n## \(e.name)\n\n"
-            out += "Table `\(e.tableName)`.\(e.kind.isEmpty ? "" : " Kind: \(e.kind).")\(e.definition.isEmpty ? "" : " " + e.definition.replacingOccurrences(of: "\n", with: " "))\n\n"
+            out += "\n## \(line(e.name))\n\n"
+            out += "Table \(code(e.tableName)).\(e.kind.isEmpty ? "" : " Kind: \(line(e.kind)).")\(e.definition.isEmpty ? "" : " " + line(e.definition))\n\n"
             out += "| Attribute | Column | Type | Key | Required | Default | Refers to | Definition |\n|---|---|---|---|---|---|---|---|\n"
             for a in e.attributes {
-                out += "| " + [a.name, "`\(a.columnName)`", typeText(a, d), keyText(a), a.notNull ? "yes" : "", a.defaultValue,
-                               referenceText(a, d), a.definition].map(cell).joined(separator: " | ") + " |\n"
+                var cells: [String] = [cell(a.name), cell(code(a.columnName), escaped: true)]
+                for text in [typeText(a, d), keyText(a), a.notNull ? "yes" : "", a.defaultValue, referenceText(a, d), a.definition] { cells.append(cell(text)) }
+                out += "| " + cells.joined(separator: " | ") + " |\n"
             }
             if !e.indexes.isEmpty {
                 out += "\n| Index | Unique | Attributes |\n|---|---|---|\n"
@@ -131,11 +132,32 @@ public enum Report {
         }
     }
 
-    static func cell(_ s: String) -> String {
-        s.replacingOccurrences(of: "|", with: "\\|").replacingOccurrences(of: "\n", with: " ")
+    /// Text on one line of the Markdown. A `<` gets a backslash: most places that show Markdown also take HTML
+    /// in it, and a name or a definition in a diagram from someone else is not the place for a tag.
+    static func line(_ s: String) -> String {
+        s.split(whereSeparator: \.isNewline).joined(separator: " ").replacingOccurrences(of: "<", with: "\\<")
     }
 
+    /// A name as code. Fenced with one more backtick than the name has in a row, so it can't end the code early.
+    static func code(_ s: String) -> String {
+        let text = s.split(whereSeparator: \.isNewline).joined(separator: " ")
+        var longest = 0, run = 0
+        for ch in text { run = ch == "`" ? run + 1 : 0; longest = max(longest, run) }
+        let fence = String(repeating: "`", count: longest + 1)
+        return longest == 0 ? "`\(text)`" : "\(fence) \(text) \(fence)"
+    }
+
+    /// One cell of a table. `escaped`: it is Markdown already (a name as code), only the table's own | matters.
+    static func cell(_ s: String, escaped: Bool = false) -> String {
+        (escaped ? s : line(s)).replacingOccurrences(of: "|", with: "\\|")
+    }
+
+    /// One field of the CSV. A spreadsheet takes a cell that starts with = + - or @ (or a tab or a return in front
+    /// of one) as a formula to work out, and a formula can fetch things or start them. Those cells get a ' in
+    /// front, which a spreadsheet shows as the text it is.
     static func field(_ s: String) -> String {
-        s.contains(where: { $0 == "," || $0 == "\"" || $0.isNewline }) ? "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : s
+        var text = s
+        if let first = text.unicodeScalars.first, "=+-@\t\r".unicodeScalars.contains(first) { text = "'" + text }
+        return text.contains(where: { $0 == "," || $0 == "\"" || $0.isNewline }) ? "\"" + text.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : text
     }
 }

@@ -214,7 +214,9 @@ extension DiagramStore {
     var canPasteActivityParts: Bool { diagram.activity != nil && pasteboard.data(forType: Self.activityPasteboardType) != nil }
 
     func pasteActivityParts(at point: CGPoint? = nil) {
-        guard let data = pasteboard.data(forType: Self.activityPasteboardType), let part = try? JSONDecoder().decode(Activity.self, from: data) else { return }
+        guard let data = pasteboard.data(forType: Self.activityPasteboardType), var part = try? JSONDecoder().decode(Activity.self, from: data) else { return }
+        // The clipboard is anyone's: what comes off it is checked like a file.
+        part.sanitize()
         insert(part, at: point, name: "Paste")
     }
 

@@ -3,6 +3,18 @@
 Every release of Maben Schema. The newest version is at the top. `publish.sh` uses the section for the version it
 releases as the GitHub release notes, and schema.maben.gg/changelog is built from this file.
 
+## 0.3.1 · 27 November 2026
+
+- A diagram from someone else can no longer put a script into the SVG or the document you export from it: a picture that isn't a picture is left out, and what isn't a colour or a number isn't kept as one
+- An update is checked again as the copy that goes in, has to be notarized by Apple, and only ever comes from this app's own releases on GitHub. If an install fails the app is still there, and quitting waits for an install that is under way
+- An update that arrives while you start a new diagram no longer restarts the app: it waits until no diagram is open or until you quit, and Settings offers Restart once it is in
+- In the SQL, a definition stays a comment whatever kind of line end is in it. A type or a default that would end its statement is left out with a `-- skipped:` note, and listed under Problems
+- A link on an entity opens only when it is a web address (http or https); anything else is text
+- Import Spreadsheet and Compare read their file in the background, and a workbook made to freeze or stop the app is refused ("This file couldn't be read.")
+- Tidy Up no longer stops the app on a very long chain of tables, and a file with numbers no canvas can hold, or with two things under one id, opens, draws and exports
+- In the CSV data dictionary a cell that starts with =, +, - or @ gets a ' in front, so a spreadsheet shows it and doesn't work it out as a formula
+- The command-line flags for building and testing the app (`--export`, `--snapshot`, `--selftest` and the like) are in debug builds only
+
 ## 0.3 · 26 November 2026
 
 - Activity diagrams, in the same file as the ER diagrams, each as a tab of its own (Diagram › New Activity Diagram, or the + beside the tabs): a start, actions, decisions and merges, forks and joins, an end and the end of one flow, objects, signals sent and received, a wait for a time, an action that is another activity, connectors, notes and text

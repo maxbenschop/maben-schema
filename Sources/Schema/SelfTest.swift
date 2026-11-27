@@ -5,6 +5,8 @@ import SchemaCore
 /// checks the diagram after each step. Runs in a window nobody sees.
 @MainActor
 enum SelfTest {
+    // The self-test is for building the app: a debug build has it, the app people download doesn't.
+    #if DEBUG
     static var failures = 0
 
     static func check(_ ok: Bool, _ what: String) {
@@ -149,6 +151,7 @@ enum SelfTest {
         let back = try? Diagram.decode(store.diagram.encoded())
         check(back == store.diagram, "the file reads back the same")
 
+        hostile()
         mouse(store, canvas)
 
         // An activity diagram has a canvas of its own, which the window makes once it is shown: a moment later.
@@ -159,6 +162,68 @@ enum SelfTest {
             print(failures == 0 ? "\nAll steps passed." : "\n\(failures) step(s) failed.")
             exit(failures == 0 ? 0 : 1)
         }
+    }
+
+    /// A diagram put together by hand to do harm: markup where a picture, a name or a colour should be, numbers no
+    /// canvas can hold, two entities with one id. It has to open, draw and export as an ordinary, if odd, diagram.
+    static func hostile() {
+        func wellFormed(_ xml: String) -> Bool { XMLParser(data: Data(xml.utf8)).parse() }
+        let script = "\\\"/><script>alert(1)</script><x y=\\\""
+        let id = "11111111-1111-1111-1111-111111111111", other = "22222222-2222-2222-2222-222222222222"
+        let json = """
+        {"version": 2, "display": {}, "dialect": "postgres", "domains": [],
+         "entities": [
+          {"id": "\(id)", "name": "A<script>alert(1)</script>&\\"'", "physicalName": "", "definition": "</text><script>x</script>", "color": "none",
+           "position": {"x": 1e308, "y": -1e308}, "width": 1e308, "z": 9223372036854775807,
+           "style": {"fill": "\(script)", "line": "red", "text": "#12345G"},
+           "attributes": [{"id": "33333333-3333-3333-3333-333333333333", "name": "id<b>", "physicalName": "", "type": "INT</text>", "isPrimaryKey": true,
+                           "notNull": true, "unique": false, "autoIncrement": false, "defaultValue": "", "definition": ""}]},
+          {"id": "\(id)", "name": "Twin", "physicalName": "", "definition": "", "color": "none", "position": {"x": 0, "y": 0}, "attributes": []},
+          {"id": "\(other)", "name": "Far", "physicalName": "", "definition": "", "color": "none", "position": {"x": -1e308, "y": 1e308}, "z": -9223372036854775808, "attributes": []}],
+         "relationships": [{"id": "44444444-4444-4444-4444-444444444444", "parent": "\(id)", "child": "\(other)", "kind": "nonIdentifying", "name": "<i>has</i>",
+                            "parentOptional": false, "childCardinality": "counted", "childLower": 9223372036854775807, "childUpper": 9223372036854775807,
+                            "onDelete": "noAction", "onUpdate": "noAction", "waypoints": [{"x": 1e308, "y": 1e308}]}],
+         "annotations": [
+          {"id": "55555555-5555-5555-5555-555555555555", "kind": "image", "x": 10, "y": 10, "width": 40, "height": 40, "image": "\(script)"},
+          {"id": "66666666-6666-6666-6666-666666666666", "kind": "image", "x": 60, "y": 10, "width": 40, "height": 40,
+           "image": "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIG9ubG9hZD0iYWxlcnQoMSkiLz4="},
+          {"id": "77777777-7777-7777-7777-777777777777", "kind": "text", "x": 1e308, "y": 0, "width": 1e308, "height": 1e308, "size": 1e308, "text": "<script>t</script>"}]}
+        """
+        guard let d = try? Diagram.decode(Data(json.utf8)) else { check(false, "a diagram made to do harm still opens"); return }
+        check(Set(d.entities.map(\.id)).count == 3, "two entities with one id get an id each")
+        check(d.annotations.allSatisfy { $0.image.isEmpty }, "what isn't a picture is not kept as one (markup, and an SVG with a script)")
+        check(d.entities[0].style.isPlain, "what isn't a colour is not kept as one")
+        check(d.entities.allSatisfy { abs($0.position.x) <= Geometry.reach && abs($0.z) <= Geometry.highestLayer }, "places and layers are brought within the canvas")
+        let scene = Scene(d)
+        let svg = SVG.document(scene, dark: false, transparent: false)
+        check(wellFormed(svg) && !svg.contains("<script") && !svg.contains("<image"), "its SVG is well-formed, with the markup as text and no picture that isn't one")
+        let page = DocumentExport.html(for: d, scene: scene, title: "<script>t</script>")
+        check(!page.contains("<script") && page.contains("&lt;script&gt;"), "its document shows the markup as text")
+        check(Picture.pdf(scene, dark: false, transparent: false).count > 100, "it draws as a PDF")
+        check(AstaExport.data(for: d, layout: scene.astaLayout).count > 1000, "it exports for Astah")
+        check(AutoLayout.positions(for: d, sizes: scene.sizes).count == 3, "it can be tidied up")
+        let printed = Picture.PrintView(scene: scene, title: "Test", fit: false, marks: false)
+        printed.layout(for: NSPrintInfo())
+        var pages = NSRange()
+        check(printed.knowsPageRange(&pages) && pages.length <= 40_000, "it prints on a number of pages that can be")
+
+        // A picture that is one goes into the SVG written out again; one a browser doesn't draw goes in as PNG.
+        let dot = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                   colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        let png = dot?.representation(using: .png, properties: [:]) ?? Data(), tiff = dot?.tiffRepresentation ?? Data()
+        check(SVG.address(ofPicture: png.base64EncodedString())?.hasPrefix("data:image/png;base64,iVBOR") == true, "a PNG goes into an SVG as a PNG")
+        check(SVG.address(ofPicture: tiff.base64EncodedString())?.hasPrefix("data:image/png;base64,iVBOR") == true, "a TIFF goes into an SVG as a PNG")
+        check(SVG.address(ofPicture: Data("<svg onload=\"x\"/>".utf8).base64EncodedString()) == nil && SVG.address(ofPicture: "\"/><script>") == nil,
+              "an SVG or plain markup doesn't go in at all")
+        var withPicture = Diagram()
+        var picture = Annotation(kind: .image, x: 0, y: 0, width: 20, height: 20)
+        picture.image = png.base64EncodedString()
+        withPicture.annotations = [picture]
+        let drawn = SVG.document(Scene(withPicture), dark: false, transparent: false)
+        check(wellFormed(drawn) && drawn.contains("<image") && drawn.contains("href=\"data:image/png;base64,"), "a diagram with a picture has it in its SVG")
+        // Coarser rather than impossible: a picture of something enormous still has a size that can be made.
+        let dots = Safe.pixels(width: 2_000_000, height: 2_000_000, scale: 4)
+        check(dots != nil && dots!.wide <= 32_000 && dots!.wide * dots!.high <= 256_000_000, "a picture of an enormous diagram is made coarser, not impossible")
     }
 
     /// An activity diagram, made the way you would: with clicks and drags on its canvas, and typing in place.
@@ -487,6 +552,8 @@ enum SelfTest {
         let noteNow = store.scene.annotation(note.id)!
         check(menuTitles(CGPoint(x: noteNow.frame.midX, y: noteNow.frame.midY)).contains("Edit Text"), "right-click on a note offers Edit Text")
     }
+
+    #endif
 
     /// `--bench`: how long the things you'd feel take, on a diagram far larger than most.
     static func bench(_ store: DiagramStore, tables: Int) {

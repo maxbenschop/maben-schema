@@ -32,6 +32,14 @@ public enum SheetImport {
         ["yes", "y", "true", "1", "x", "✓", "✔", "pk", "fk", "nn", "ja", "j"].contains(value.trimmingCharacters(in: .whitespaces).lowercased())
     }
 
+    /// A cell without the ' this app's CSV puts in front of what a spreadsheet would take for a formula (`'-1`,
+    /// `'=now()`). A value that is in quotes of its own (`'-'`) has an even number of them and is left alone.
+    static func unguarded(_ value: String) -> String {
+        guard value.hasPrefix("'"), let second = value.dropFirst().first, "=+-@".contains(second),
+              value.filter({ $0 == "'" }).count % 2 == 1 else { return value }
+        return String(value.dropFirst())
+    }
+
     /// The sheets of a workbook as a diagram. `tables` is 0 when no sheet has a row per attribute.
     public static func parse(_ workbook: Workbook) -> SQLImport.Result {
         var tables: [SQLImport.ParsedTable] = []
@@ -48,7 +56,7 @@ public enum SheetImport {
             let hasAttribute = at["attribute"] != nil || at["column"] != nil
             guard hasEntity else { continue }
             for row in sheet.rows.dropFirst() {
-                func cell(_ k: String) -> String { at[k].flatMap { row.indices.contains($0) ? row[$0].trimmingCharacters(in: .whitespacesAndNewlines) : nil } ?? "" }
+                func cell(_ k: String) -> String { at[k].flatMap { row.indices.contains($0) ? unguarded(row[$0].trimmingCharacters(in: .whitespacesAndNewlines)) : nil } ?? "" }
                 let entity = cell("entity"), given = cell("table")
                 let table = given.isEmpty ? entity : given
                 guard !table.isEmpty else { continue }
